@@ -2058,6 +2058,98 @@ const manyDiffs = Array.from({ length: 40 }, (_, index) => ({
   file: `file${String(index).padStart(2, "0")}.txt`,
 }))
 
+test.each([80, 160])("virtualizes a large added file at %i columns without losing its end", async (width) => {
+  const lines = [
+    "+{",
+    ...Array.from(
+      { length: 2500 },
+      (_, index) =>
+        `+  "row-${String(index).padStart(4, "0")}": "${"value".repeat(index === 777 ? 2000 : index % 7 === 0 ? 24 : 1)}"${index === 2499 ? "" : ","}`,
+    ),
+    "+}",
+  ]
+  const viewer = await renderDiffViewer(
+    [
+      {
+        file: "snapshot.json",
+        status: "added",
+        additions: lines.length,
+        deletions: 0,
+        patch: `diff --git a/snapshot.json b/snapshot.json\nnew file mode 100644\n--- /dev/null\n+++ b/snapshot.json\n@@ -0,0 +1,${lines.length} @@\n${lines.join("\n")}`,
+      },
+    ],
+    { width, height: 24 },
+  )
+  try {
+    expect(viewer.app.captureCharFrame()).toContain("row-0000")
+    expect(
+      findDiffs(viewer.app.renderer.root).reduce((total, node) => total + node.diff.split("\n").length, 0),
+    ).toBeLessThan(900)
+    viewer.commands.get("diff.last")!.run()
+    await viewer.app.flush()
+    if (!viewer.app.captureCharFrame().includes("row-2499")) {
+      await viewer.app.waitForFrame((frame) => frame.includes("row-2499"))
+    }
+    expect(viewer.app.captureCharFrame()).toContain("row-2499")
+    expect(
+      findDiffs(viewer.app.renderer.root).reduce((total, node) => total + node.diff.split("\n").length, 0),
+    ).toBeLessThan(900)
+    viewer.commands.get("diff.first")!.run()
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).toContain("row-0000")
+    viewer.app.resize(width === 80 ? 160 : 80, 20)
+    await viewer.app.flush()
+    viewer.commands.get("diff.last")!.run()
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).toContain("row-2499")
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
+test("file navigation and review still work after a virtualized patch", async () => {
+  const additions = Array.from({ length: 2200 }, (_, index) => `+added line ${index}`)
+  const viewer = await renderDiffViewer(
+    [
+      {
+        file: "a-large.txt",
+        status: "added",
+        additions: additions.length,
+        deletions: 0,
+        patch: `--- /dev/null\n+++ b/a-large.txt\n@@ -0,0 +1,${additions.length} @@\n${additions.join("\n")}`,
+      },
+      { ...hunkDiff[0], file: "b-small.txt" },
+    ],
+    { width: 160, height: 24 },
+  )
+  try {
+    const scroll = findScrollBox(viewer.app.renderer.root)!
+    scroll.scrollTo(900)
+    await viewer.app.flush()
+    viewer.commands.get("diff.previous_hunk")!.run()
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).toContain("added line 0")
+    viewer.commands.get("diff.next_hunk")!.run()
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).toContain("b-small.txt")
+    viewer.commands.get("diff.next_file")!.run()
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).toContain("b-small.txt")
+    expect(viewer.app.captureCharFrame()).toContain("const first")
+    viewer.commands.get("diff.previous_file")!.run()
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).toContain("a-large.txt")
+    viewer.commands.get("diff.mark_reviewed")!.run()
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).not.toContain("added line 0")
+    viewer.commands.get("diff.mark_reviewed")!.run()
+    await viewer.app.flush()
+    expect(viewer.app.captureCharFrame()).toContain("added line 0")
+  } finally {
+    viewer.app.renderer.destroy()
+  }
+})
+
 function findScrollBox(root: Renderable, patches = true): ScrollBoxRenderable | undefined {
   const node = root.findDescendantById(patches ? "diff-patches" : "diff-files")
   return node instanceof ScrollBoxRenderable ? node : undefined
