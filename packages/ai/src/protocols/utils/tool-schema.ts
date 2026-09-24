@@ -1,4 +1,5 @@
 import type { JsonSchema, LanguageModel, LanguageModelSanitizerCompatibility } from "../../schema/index.js"
+import { isRecord } from "../../utils/record.js"
 import { GeminiJsonSchema } from "./gemini-json-schema.js"
 import { MoonshotJsonSchema } from "./moonshot-json-schema.js"
 

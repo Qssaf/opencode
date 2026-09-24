@@ -273,6 +273,32 @@ describe("tool schema projections", () => {
     })
   })
 
+  test("moonshot does not expose ignored invalid branches to validation", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        nullable: { type: ["string", "null"], minLength: null },
+        intersection: {
+          allOf: [
+            { type: "object", properties: { disabled: false } },
+            { type: "object", properties: { enabled: { type: "string" } } },
+          ],
+        },
+        tagged: {
+          oneOf: [
+            {
+              type: "object",
+              properties: { kind: { type: "string", enum: ["a"] }, disabled: false },
+              required: ["kind"],
+            },
+            { type: "object", properties: { kind: { type: "string", enum: ["b"] } }, required: ["kind"] },
+          ],
+        },
+      },
+    }
+    expect(ToolSchemaProjection.moonshot(schema)).toEqual(schema)
+  })
+
   test("moonshot handles boolean branches and tuple bounds", () => {
     expect(
       ToolSchemaProjection.moonshot({

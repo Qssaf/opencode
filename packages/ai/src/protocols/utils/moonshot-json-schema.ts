@@ -25,6 +25,7 @@ const ANNOTATIONS = new Set([
 ])
 const TYPES = new Set(["null", "boolean", "object", "array", "number", "integer", "string"])
 const NULLABLE_ENUM_TYPES = new Set(["string", "number", "integer", "boolean"])
+const RESERVED_PROPERTIES = new Set(["$defs", "$ref", "anyOf", "required", "additionalProperties"])
 
 const mapValues = (record: Record<string, unknown>, map: (value: unknown, key: string) => unknown) =>
   Object.fromEntries(Object.entries(record).map(([key, value]) => [key, map(value, key)]))
@@ -110,6 +111,9 @@ const mergeObjects = (schema: Record<string, unknown>): Record<string, unknown> 
         !isRecord(branch) ||
         branch.type !== "object" ||
         !isRecord(branch.properties) ||
+        Object.entries(branch.properties).some(([name, value]) => RESERVED_PROPERTIES.has(name) || !isRecord(value)) ||
+        ("required" in branch &&
+          (!Array.isArray(branch.required) || branch.required.some((name) => typeof name !== "string"))) ||
         Object.keys(branch).some((key) => !["type", "properties", "required"].includes(key)),
     )
   )
@@ -123,7 +127,11 @@ const mergeObjects = (schema: Record<string, unknown>): Record<string, unknown> 
     ...omit(schema, "allOf"),
     type: "object",
     properties,
-    required: [...new Set(branches.flatMap((branch) => (Array.isArray(branch.required) ? branch.required : [])))],
+    ...(branches.some((branch) => "required" in branch)
+      ? {
+          required: [...new Set(branches.flatMap((branch) => (Array.isArray(branch.required) ? branch.required : [])))],
+        }
+      : {}),
   }
 }
 
@@ -136,7 +144,16 @@ const taggedUnion = (schema: Record<string, unknown>, root: JsonSchema) => {
     if (typeof branch.$ref !== "string") return branch
     return resolve(branch.$ref, root)
   })
-  if (branches.some((branch) => !branch || branch.type !== "object" || !isRecord(branch.properties))) return schema
+  if (
+    branches.some(
+      (branch) =>
+        !branch ||
+        branch.type !== "object" ||
+        !isRecord(branch.properties) ||
+        Object.entries(branch.properties).some(([name, value]) => RESERVED_PROPERTIES.has(name) || !isRecord(value)),
+    )
+  )
+    return schema
   const first = branches[0]
   if (!first || !isRecord(first.properties)) return schema
   const tag = Object.keys(first.properties).find((name) => {
@@ -273,6 +290,9 @@ const typeList = (schema: Record<string, unknown>) => {
   const constraints = omit(schema, "type", "$defs", "$id", "description", "title", "default")
   if (Object.keys(constraints).length === 0 && !("default" in schema)) return schema
   if (Object.keys(constraints).length === 1 && "enum" in constraints && !("default" in schema)) return schema
+  // Walle accepts a null bound on a type list but rejects it on its individual branches.
+  if (["minLength", "maxLength", "minItems", "maxItems", "minimum", "maximum"].some((key) => constraints[key] === null))
+    return schema
   const branches = schema.type.flatMap((type) => {
     if (!Array.isArray(constraints.enum)) return [integerBounds({ type, ...constraints })]
     const values = constraints.enum.filter(
