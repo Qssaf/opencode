@@ -638,8 +638,19 @@ export function Session(props: {
         }}
         actions={[
           {
+            command: "queued_prompt.delete",
+            title: "delete",
+            onTrigger: (option) => {
+              const last = queuedPrompts().length === 1
+              void mutatePending("cancel", option.value).then((cancelled) => {
+                if (cancelled && last) dialog.clear()
+              })
+            },
+          },
+          {
             command: "queued_prompt.move_back",
             title: "move back",
+            side: "right",
             onTrigger: (option) => {
               const target = prompt()
               const queued = queuedPrompts().find((item) => item.id === option.value)
@@ -661,16 +672,6 @@ export function Session(props: {
                 target.set({ ...projectedPromptInput(queued.payload), pasted: [] })
                 dialog.clear()
                 target.focus()
-              })
-            },
-          },
-          {
-            command: "queued_prompt.delete",
-            title: "delete",
-            onTrigger: (option) => {
-              const last = queuedPrompts().length === 1
-              void mutatePending("cancel", option.value).then((cancelled) => {
-                if (cancelled && last) dialog.clear()
               })
             },
           },

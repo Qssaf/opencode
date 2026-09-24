@@ -157,18 +157,6 @@ function SessionQueueRow(props: { queue: SessionQueueView; id: string; index: nu
             }}
           >
             <Show when={!editing()}>
-              <Button
-                data-action="session-queue-move-back"
-                type="button"
-                size="small"
-                variant="ghost-faint"
-                icon="arrow-left"
-                disabled={props.queue.busy()}
-                class="![font-weight:530]"
-                onClick={() => props.queue.moveBack(props.id)}
-              >
-                {language.t("session.queue.moveBack")}
-              </Button>
               <Tooltip
                 placement="top"
                 inactive={!props.queue.working()}
@@ -186,6 +174,18 @@ function SessionQueueRow(props: { queue: SessionQueueView; id: string; index: nu
                 >
                   {props.queue.working() ? language.t("session.queue.steer") : language.t("session.queue.send")}
                 </Button>
+              </Tooltip>
+              <Tooltip placement="top" value={language.t("session.queue.moveBack")}>
+                <IconButton
+                  data-action="session-queue-move-back"
+                  type="button"
+                  size="small"
+                  variant="ghost-muted"
+                  icon={<Icon name="reset" />}
+                  disabled={props.queue.busy()}
+                  aria-label={language.t("session.queue.moveBack")}
+                  onClick={() => props.queue.moveBack(props.id)}
+                />
               </Tooltip>
             </Show>
             <Tooltip placement="top" value={language.t("session.queue.remove")}>

@@ -244,7 +244,20 @@ test("Move Back cancels only the selected queued prompt and focuses the restored
   const view = await openSession(page, mock)
   await expect(view.rows).toHaveCount(3)
 
-  await view.rows.filter({ hasText: "second queued prompt" }).getByRole("button", { name: "Move Back" }).click()
+  const row = view.rows.filter({ hasText: "second queued prompt" })
+  const actions = row.locator('[data-slot="session-queue-actions"] button')
+  await expect(actions).toHaveCount(3)
+  expect(
+    await actions.evaluateAll((buttons) =>
+      buttons.map((button) => button.getAttribute("aria-label") ?? button.textContent?.trim()),
+    ),
+  ).toEqual(["Steer", "Move Back", "Remove"])
+  const moveBack = row.getByRole("button", { name: "Move Back" })
+  await expect(moveBack).toHaveText("")
+  await expect(moveBack.locator("svg use")).toHaveAttribute("href", "#opencode-v2-icon-reset")
+  await moveBack.hover()
+  await expect(page.getByRole("tooltip")).toHaveText("Move Back")
+  await moveBack.click()
   await expect(view.rows.locator('[data-action="session-queue-edit"]')).toHaveText([
     "first queued prompt",
     "third queued prompt",
@@ -288,6 +301,7 @@ test("Move Back stays usable with a long queue on a narrow screen", async ({ pag
   await expect(view.rows).toHaveCount(7)
   const row = view.rows.filter({ hasText: text })
   await row.getByRole("button", { name: "Move Back" }).hover()
+  await expect(page.getByRole("tooltip")).toHaveText("Move Back")
   await page.screenshot({ path: testInfo.outputPath("move-back-narrow-queue.png") })
   await row.getByRole("button", { name: "Move Back" }).click()
   await expect(view.rows).toHaveCount(6)

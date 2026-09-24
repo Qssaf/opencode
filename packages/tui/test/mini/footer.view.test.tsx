@@ -1275,7 +1275,7 @@ test.each(["queue", "steer"] as const)("direct footer toggles and deletes pendin
     expect(frame).toContain("Pending prompts")
     expect(frame).toContain("follow up")
     expect(frame).toContain(delivery === "queue" ? "queued" : "steering")
-    expect(frame).toContain(`enter ${delivery === "queue" ? "steer" : "queue"} · ctrl+m move back · ctrl+d delete`)
+    expect(frame).toContain(`enter ${delivery === "queue" ? "steer" : "queue"} · ctrl+d delete · ctrl+m move back`)
     expect(frame).not.toContain("┌")
     expect(frame).not.toContain("┃")
     expectPaletteList(list, 0)
@@ -1408,7 +1408,9 @@ test("move back retains mentioned files when the prompt is sent again", async ()
         },
       },
     ],
-    onQueuedPromptAction: async () => app.setQueuedPrompts([]),
+    onQueuedPromptAction: async () => {
+      app.setQueuedPrompts([])
+    },
     onSubmit: (prompt) => {
       submitted.push(prompt)
       return true

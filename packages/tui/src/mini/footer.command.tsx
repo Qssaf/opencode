@@ -1011,8 +1011,8 @@ export function RunQueuedPromptSelectBody(props: {
       onQuery={controller.setQuery}
       hint={[
         controller.items()[controller.menu.selected()]?.prompt.delivery === "steer" ? "enter queue" : "enter steer",
-        moveBackShortcut() ? `${moveBackShortcut()} move back` : undefined,
         deleteShortcut() ? `${deleteShortcut()} delete` : undefined,
+        moveBackShortcut() ? `${moveBackShortcut()} move back` : undefined,
       ]
         .filter(Boolean)
         .join(" · ")}
