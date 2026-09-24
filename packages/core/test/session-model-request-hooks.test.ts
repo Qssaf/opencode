@@ -1,5 +1,7 @@
 import { describe, expect } from "bun:test"
-import { OpenAIChat } from "@opencode/ai/protocols"
+import { AnthropicMessages, OpenAIChat } from "@opencode/ai/protocols"
+import { Message } from "@opencode/ai"
+import { compileRequest } from "@opencode/ai/route/client"
 import { Agent } from "@opencode/schema/agent"
 import { Money } from "@opencode/schema/money"
 import { Session } from "@opencode/schema/session"
@@ -37,6 +39,94 @@ const transport = SessionModelTransport.Service.of({
   bind: () => ({ execute: () => Effect.die("unused WebSocket execution") }),
   close: () => Effect.void,
   closeAll: Effect.void,
+})
+
+describe("SessionModelRequest Claude output limit", () => {
+  it.effect("passes the catalog limit capped at 128k from primary into the Messages API", () =>
+    Effect.gen(function* () {
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const claude = AnthropicMessages.route.model({ id: "claude-opus-4-8" })
+      for (const [output, expected] of [
+        [256_000, 128_000],
+        [64_000, 64_000],
+        [0, 32_000],
+      ]) {
+        const prepared = yield* requests.primary({
+          session,
+          agent: Agent.ID.make("build"),
+          model: SessionRunnerModel.resolved(claude, {
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            cost: [],
+            limit: { context: 200_000, output },
+          }),
+          system: [],
+          messages: [Message.user("hello")],
+        })
+        expect(prepared.event.options.maxTokens).toBe(expected)
+        expect(prepared.request.generation?.maxTokens).toBe(expected)
+        expect((yield* compileRequest(prepared.request)).body.max_tokens).toBe(expected)
+      }
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+  )
+
+  it.effect("does not change non-primary requests or non-Claude models", () =>
+    Effect.gen(function* () {
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const options = {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        cost: [],
+        limit: { context: 200_000, output: 256_000 },
+      }
+      const claude = SessionRunnerModel.resolved(AnthropicMessages.route.model({ id: "claude-sonnet-4-6" }), options)
+      for (const kind of ["compaction", "title", "generate"] as const) {
+        const prepared = yield* requests[kind]({
+          session,
+          agent: Agent.ID.make("build"),
+          model: claude,
+          system: [],
+          messages: [],
+        })
+        expect(prepared.request.generation?.maxTokens).toBeUndefined()
+      }
+      for (const candidate of [
+        AnthropicMessages.route.model({ id: "kimi-k2" }),
+        OpenAIChat.route.model({ id: "claude-sonnet-4-6", provider: "test" }),
+      ]) {
+        const prepared = yield* requests.primary({
+          session,
+          agent: Agent.ID.make("build"),
+          model: SessionRunnerModel.resolved(candidate, options),
+          system: [],
+          messages: [],
+        })
+        expect(prepared.request.generation?.maxTokens).toBeUndefined()
+      }
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+  )
+
+  it.effect("lets the context hook override the temporary default", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          event.options.maxTokens = 8_000
+        }),
+      )
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const prepared = yield* requests.primary({
+        session,
+        agent: Agent.ID.make("build"),
+        model: SessionRunnerModel.resolved(AnthropicMessages.route.model({ id: "claude-opus-4-8" }), {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost: [],
+          limit: { context: 200_000, output: 256_000 },
+        }),
+        system: [],
+        messages: [],
+      })
+      expect(prepared.request.generation?.maxTokens).toBe(8_000)
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+  )
 })
 
 describe("SessionModelRequest HTTP hooks", () => {

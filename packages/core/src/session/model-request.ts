@@ -44,6 +44,8 @@ const IMAGE_BYTES_TARGET = 15 * 1024 * 1024 // 15 MiB
 const IMAGE_REMOVED =
   "[This image was removed to reduce the request size and is no longer visible. Do not make claims about its contents from memory. If needed, retrieve it again with an available tool or ask the user to attach it again.]"
 const GENERATION_KEYS = new Set(Object.keys(GenerationOptions.fields))
+const CLAUDE_OUTPUT_CAP = 128_000
+const ANTHROPIC_DEFAULT_OUTPUT = 32_000
 
 /** Tool errors, plus the user declining a permission or dismissing a question. */
 export type ExecuteError = Tool.Error | Permission.DeclinedError | QuestionTool.CancelledError
@@ -218,8 +220,22 @@ export const layer = Layer.effect(
       const given = new Map(
         tools.definitions.map((t) => [{ description: t.description, input: { ...t.inputSchema } }, t] as const),
       )
+      // Temporary Claude Messages limit until the context-aware policy in #51021 lands.
+      // Leave other models and request kinds on their existing provider defaults.
+      const claudeMessages =
+        kind === "primary" &&
+        model.model.route.protocol === "anthropic-messages" &&
+        /(?:^|[./])claude-/.test(model.model.id.toLowerCase())
       const shaped = yield* shape(
-        { sessionID: session.id, model: model.ref, system: input.system, messages: input.messages, options: {} },
+        {
+          sessionID: session.id,
+          model: model.ref,
+          system: input.system,
+          messages: input.messages,
+          options: claudeMessages
+            ? { maxTokens: Math.min(model.limit.output || ANTHROPIC_DEFAULT_OUTPUT, CLAUDE_OUTPUT_CAP) }
+            : {},
+        },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
       )
       // Match by identity first, then by key. Entries matching neither were invented by a
