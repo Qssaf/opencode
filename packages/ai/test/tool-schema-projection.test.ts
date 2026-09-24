@@ -27,12 +27,21 @@ describe("tool schema projections", () => {
       type: "object",
       properties: {
         linked: { $ref: "#/$defs/Linked", description: "keep me" },
-        tuple: { type: "array", items: { anyOf: [{ type: "string" }, { type: "number" }] } },
+        tuple: { type: "array", items: {} },
         tupleRest: { type: "array", items: { anyOf: [{ type: "string" }, { type: "integer" }] } },
-        prefixTuple: { type: "array", items: { anyOf: [{ type: "boolean" }, { type: "string" }] } },
-        closedTuple: { type: "array", items: { anyOf: [{ type: "boolean" }, { type: "string" }] } },
-        closedDraft07: { type: "array", items: { type: "boolean" } },
-        prefixRest: { type: "array", items: { anyOf: [{}, { type: "number" }, { type: "string" }] } },
+        prefixTuple: { type: "array", prefixItems: [{ type: "boolean" }, { type: "string" }], items: {} },
+        closedTuple: {
+          type: "array",
+          prefixItems: [{ type: "boolean" }, { type: "string" }],
+          maxItems: 2,
+          items: { anyOf: [{ type: "boolean" }, { type: "string" }] },
+        },
+        closedDraft07: { type: "array", maxItems: 1, items: { type: "boolean" } },
+        prefixRest: {
+          type: "array",
+          prefixItems: [{}, { type: "number" }],
+          items: { anyOf: [{}, { type: "number" }, { type: "string" }] },
+        },
       },
     })
   })
@@ -126,6 +135,13 @@ describe("tool schema projections", () => {
           mixed: { enum: ["a", 1] },
           mixedNullable: { description: "Mixed", enum: ["a", 1, null] },
           typeList: { type: ["string", "integer"], enum: ["a", 1] },
+          inUnion: {
+            anyOf: [
+              { type: "string", minLength: 2 },
+              { type: "number", minimum: 0 },
+            ],
+            enum: ["ok", 1],
+          },
           nullableList: { type: ["integer", "null"], enum: [1, null] },
           narrowedList: { type: ["string", "null"], enum: ["a", 1] },
           onlyNull: { enum: [null] },
@@ -156,7 +172,13 @@ describe("tool schema projections", () => {
         typeList: {
           anyOf: [
             { type: "string", enum: ["a"] },
-            { type: "number", enum: [1] },
+            { type: "integer", enum: [1] },
+          ],
+        },
+        inUnion: {
+          anyOf: [
+            { type: "string", minLength: 2, enum: ["ok"] },
+            { type: "number", minimum: 0, enum: [1] },
           ],
         },
         nullableList: { type: ["integer", "null"], enum: [1, null] },
@@ -217,6 +239,118 @@ describe("tool schema projections", () => {
       })
     }),
   )
+  test("moonshot keeps accepted $ref and allOf shapes accepted", () => {
+    const $defs = {
+      Union: { anyOf: [{ type: "string" }, { type: "null" }] },
+      Alias: { $ref: "#/$defs/Union" },
+      Name: { type: "string" },
+    }
+    expect(
+      ToolSchemaProjection.moonshot({
+        type: "object",
+        properties: {
+          union: { $ref: "#/$defs/Alias", anyOf: [{ type: "string" }, { type: "null" }] },
+          literal: { $ref: "#/$defs/Union", const: "a" },
+          bounded: { $ref: "#/$defs/Name", anyOf: [{ minLength: 1 }, { maxLength: 3 }] },
+        },
+        patternProperties: { "^x": { allOf: [{ $ref: "#/$defs/Name" }], description: "ignored by Moonshot" } },
+        $defs,
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        union: { $ref: "#/$defs/Alias", anyOf: [{ type: "string" }, { type: "null" }] },
+        literal: { $ref: "#/$defs/Union", const: "a" },
+        bounded: {
+          anyOf: [
+            { $ref: "#/$defs/Name", minLength: 1 },
+            { $ref: "#/$defs/Name", maxLength: 3 },
+          ],
+        },
+      },
+      patternProperties: { "^x": { allOf: [{ $ref: "#/$defs/Name" }], description: "ignored by Moonshot" } },
+      $defs,
+    })
+  })
+
+  test("moonshot handles boolean branches and tuple bounds", () => {
+    expect(
+      ToolSchemaProjection.moonshot({
+        type: "object",
+        properties: {
+          choice: { anyOf: [{ type: "string" }, true, false] },
+          blocked: { type: "array", prefixItems: [{ type: "string" }, false] },
+          extra: { type: "array", items: [{ type: "string" }], additionalItems: true },
+          literal: { type: "string", const: "a", enum: ["a", "b"] },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        choice: { anyOf: [{ type: "string" }, {}] },
+        blocked: { type: "array", prefixItems: [{ type: "string" }, false], maxItems: 1, items: { type: "string" } },
+        extra: { type: "array", items: {} },
+        literal: { type: "string", enum: ["a"] },
+      },
+    })
+  })
+
+  test("moonshot supports tagged unions, nullable constraints, and integer bounds", () => {
+    expect(
+      ToolSchemaProjection.moonshot({
+        type: "object",
+        properties: {
+          pet: { $ref: "#/$defs/Pet" },
+          optional: { type: ["string", "null"], minLength: 2, default: null },
+          count: { type: "integer", exclusiveMinimum: 0, exclusiveMaximum: 4.5 },
+          merged: {
+            allOf: [
+              { type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+              { type: "object", properties: { b: { type: "number" } } },
+            ],
+          },
+          untouched: {
+            allOf: [
+              { type: "object", properties: { a: { type: "string" } }, additionalProperties: false },
+              { type: "object", properties: { b: { type: "number" } } },
+            ],
+          },
+        },
+        $defs: {
+          Pet: { oneOf: [{ $ref: "#/$defs/Cat" }, { $ref: "#/$defs/Dog" }], discriminator: { propertyName: "kind" } },
+          Cat: { type: "object", required: ["kind"], properties: { kind: { type: "string", const: "cat" } } },
+          Dog: { type: "object", required: ["kind"], properties: { kind: { type: "string", const: "dog" } } },
+          Any: { title: "Arbitrary JSON" },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        pet: { $ref: "#/$defs/Pet" },
+        optional: {
+          default: null,
+          anyOf: [
+            { type: "string", minLength: 2 },
+            { type: "null", minLength: 2 },
+          ],
+        },
+        count: { type: "integer", minimum: 1, maximum: 4 },
+        merged: { type: "object", properties: { a: { type: "string" }, b: { type: "number" } }, required: ["a"] },
+        untouched: {
+          allOf: [
+            { type: "object", properties: { a: { type: "string" } }, additionalProperties: false },
+            { type: "object", properties: { b: { type: "number" } } },
+          ],
+        },
+      },
+      $defs: {
+        Pet: { discriminator: { propertyName: "kind" }, anyOf: [{ $ref: "#/$defs/Cat" }, { $ref: "#/$defs/Dog" }] },
+        Cat: { type: "object", required: ["kind"], properties: { kind: { type: "string", enum: ["cat"] } } },
+        Dog: { type: "object", required: ["kind"], properties: { kind: { type: "string", enum: ["dog"] } } },
+        Any: { title: "Arbitrary JSON", type: ["null", "boolean", "object", "array", "number", "string"] },
+      },
+    })
+  })
 
   it.effect("selects tool schema handling from the model name unless compatibility is explicit", () =>
     Effect.gen(function* () {
@@ -258,7 +392,7 @@ describe("tool schema projections", () => {
     }),
   )
 
-  it.effect("applies model compatibility without changing schema semantics", () =>
+  it.effect("applies model compatibility to nested schemas", () =>
     Effect.gen(function* () {
       const model = OpenAIChat.route
         .with({ endpoint: { baseURL: "https://api.openai.test/v1/" }, auth: Auth.bearer("test") })
@@ -294,7 +428,7 @@ describe("tool schema projections", () => {
           {
             type: "object",
             properties: {
-              tuple: { type: "array", items: { anyOf: [{ type: "string" }, { type: "number" }] } },
+              tuple: { type: "array", items: {} },
               linked: { $ref: "#/$defs/Linked", description: "keep me" },
             },
           },
