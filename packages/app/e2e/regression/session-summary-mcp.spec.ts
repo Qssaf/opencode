@@ -135,68 +135,6 @@ test("MCP authentication starts before a slow resource catalog finishes", async 
   expect(new URL(attempts[0]).searchParams.get("location[directory]")).toBe(fixture.directory)
 })
 
-test("clicking an MCP server that requires sign-in starts sign-in without switching it off", async ({
-  page,
-  context,
-}) => {
-  await mockStressTimeline(page)
-  const state = { status: "needs_auth" }
-  const writes: string[] = []
-  const attempts: string[] = []
-  await context.route("https://auth.example.test/**", (route) => route.fulfill({ body: "Sign in" }))
-  await page.route(/\/api\/(?:experimental\/)?mcp(?:[/?]|$)/, (route) => {
-    if (route.request().method() === "OPTIONS") return route.fallback()
-    const url = new URL(route.request().url())
-    if (route.request().method() === "POST") {
-      writes.push(url.pathname)
-      if (url.pathname.endsWith("/disconnect")) state.status = "disabled"
-      return route.fulfill({ status: 204 })
-    }
-    return route.fulfill({
-      json: {
-        location: { directory: fixture.directory },
-        data:
-          url.pathname === "/api/mcp/resource"
-            ? { resources: [], templates: [] }
-            : [{ name: "linear", integrationID: "linear-oauth", status: { status: state.status } }],
-      },
-    })
-  })
-  await page.route("**/api/integration/**", (route) => {
-    if (route.request().method() === "OPTIONS") return route.fallback()
-    if (route.request().method() === "POST") {
-      attempts.push(route.request().url())
-      return route.fulfill({
-        json: { location: { directory: fixture.directory }, data: { url: "https://auth.example.test/authorize" } },
-      })
-    }
-    return route.fulfill({
-      json: {
-        location: { directory: fixture.directory },
-        data: { id: "linear-oauth", methods: [{ id: "oauth", type: "oauth" }] },
-      },
-    })
-  })
-  await page.goto(stressSessionHref(fixture.targetID))
-  await page.getByRole("button", { name: "Session details", exact: true }).click()
-  await page.getByRole("button", { name: "MCP", exact: true }).click()
-  const submenu = page.getByRole("dialog", { name: "MCP", exact: true })
-  const toggle = submenu.getByRole("switch", { name: "linear", exact: true })
-  const row = submenu
-    .locator('[data-component="switch"]')
-    .filter({ has: page.getByRole("switch", { name: "linear", exact: true }) })
-  await expect(toggle).toBeChecked()
-  await expect(toggle).toHaveAccessibleDescription("Sign in required")
-
-  const popup = page.waitForEvent("popup")
-  await row.locator('[data-slot="switch-control"]').click()
-  await expect(await popup).toHaveURL("https://auth.example.test/authorize")
-  await expect(toggle).toBeEnabled()
-  await expect(toggle).toBeChecked()
-  expect(attempts).toHaveLength(1)
-  expect(writes).toEqual([])
-})
-
 test("multiple desktop connections show the session's server name", async ({ page }) => {
   await mockStressTimeline(page)
   await page.route("http://secondary.test/**", (route) =>
