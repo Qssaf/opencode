@@ -320,7 +320,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   }
 
   const runQueuedAction = createSingleFlight<string>()
-  const queuedPromptAction = async (action: QueuedPromptAction, inboxID: string) => {
+  const queuedPromptAction = async (action: QueuedPromptAction, inboxID: string, failureLabel?: string) => {
     const run = props.onQueuedPromptAction
     if (!run) return false
     const result = await runQueuedAction(inboxID, async () => {
@@ -329,7 +329,9 @@ export function RunFooterView(props: RunFooterViewProps) {
         (error) => error,
       )
       if (!error) return true
-      props.onStatus(`failed to ${action === "cancel" ? "delete" : action} pending prompt: ${errorMessage(error)}`)
+      props.onStatus(
+        `failed to ${failureLabel ?? (action === "cancel" ? "delete" : action)} pending prompt: ${errorMessage(error)}`,
+      )
       return false
     })
     return result ?? false
@@ -794,6 +796,16 @@ export function RunFooterView(props: RunFooterViewProps) {
                                 await queuedPromptAction(item.delivery === "queue" ? "steer" : "queue", item.messageID)
                               )
                                 closePanel()
+                            }}
+                            onMoveBack={async (item) => {
+                              const current = composer.current()
+                              if (current.text.length || current.parts.length) {
+                                props.onStatus("clear your draft before moving a prompt back")
+                                return
+                              }
+                              if (!(await queuedPromptAction("cancel", item.messageID, "move back"))) return
+                              closePanel()
+                              composer.replacePrompt({ ...item.prompt, messageID: undefined })
                             }}
                             onDelete={(item) => {
                               void queuedPromptAction("cancel", item.messageID)

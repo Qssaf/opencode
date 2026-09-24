@@ -157,6 +157,18 @@ function SessionQueueRow(props: { queue: SessionQueueView; id: string; index: nu
             }}
           >
             <Show when={!editing()}>
+              <Button
+                data-action="session-queue-move-back"
+                type="button"
+                size="small"
+                variant="ghost-faint"
+                icon="arrow-left"
+                disabled={props.queue.busy()}
+                class="![font-weight:530]"
+                onClick={() => props.queue.moveBack(props.id)}
+              >
+                {language.t("session.queue.moveBack")}
+              </Button>
               <Tooltip
                 placement="top"
                 inactive={!props.queue.working()}

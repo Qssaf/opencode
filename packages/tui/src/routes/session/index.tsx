@@ -211,7 +211,9 @@ export function Session(props: {
   )
   const pendingDeliveries = createMemo(() => new Map(pendingUsers().map((item) => [item.id, item.delivery])))
   const queuedPrompts = createMemo(() =>
-    pendingUsers().flatMap((item) => (item.delivery === "queue" ? [{ id: item.id, text: item.payload.text }] : [])),
+    pendingUsers().flatMap((item) =>
+      item.delivery === "queue" ? [{ id: item.id, text: item.payload.text, payload: item.payload }] : [],
+    ),
   )
   const [composer, setComposer] = createStore({
     open: false,
@@ -601,7 +603,7 @@ export function Session(props: {
   const dialog = useDialog()
   const renderer = useRenderer()
   const runPendingAction = createSingleFlight<string>()
-  const mutatePending = async (action: PendingAction, inboxID: string) => {
+  const mutatePending = async (action: PendingAction, inboxID: string, failureLabel?: string) => {
     const result = await runPendingAction(inboxID, async () => {
       const request =
         action === "steer"
@@ -614,7 +616,7 @@ export function Session(props: {
         (error) => error,
       )
       if (!error) return true
-      const label = action === "cancel" ? "delete" : action
+      const label = failureLabel ?? (action === "cancel" ? "delete" : action)
       toast.show({ title: `Failed to ${label} pending prompt`, message: errorMessage(error), variant: "error" })
       return false
     })
@@ -635,6 +637,33 @@ export function Session(props: {
           })
         }}
         actions={[
+          {
+            command: "queued_prompt.move_back",
+            title: "move back",
+            onTrigger: (option) => {
+              const target = prompt()
+              const queued = queuedPrompts().find((item) => item.id === option.value)
+              if (!target || !queued) return
+              const current = target.current
+              if (
+                current.text.length ||
+                current.files?.length ||
+                current.agents?.length ||
+                current.skills?.length ||
+                current.pasted.length
+              ) {
+                toast.show({ message: "Clear or stash your draft before moving a prompt back", variant: "error" })
+                return
+              }
+              void mutatePending("cancel", queued.id, "move back").then((moved) => {
+                if (!moved) return
+                target.setMode("normal")
+                target.set({ ...projectedPromptInput(queued.payload), pasted: [] })
+                dialog.clear()
+                target.focus()
+              })
+            },
+          },
           {
             command: "queued_prompt.delete",
             title: "delete",

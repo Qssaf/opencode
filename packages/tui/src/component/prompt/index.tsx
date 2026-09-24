@@ -90,6 +90,7 @@ export type PromptProps = {
 export type PromptRef = {
   focused: boolean
   current: PromptInfo
+  setMode(mode: "normal" | "shell"): void
   set(prompt: PromptInfo): void
   reset(): void
   blur(): void
@@ -678,6 +679,9 @@ export function Prompt(props: PromptProps) {
     },
     blur() {
       input.blur()
+    },
+    setMode(mode) {
+      setStore("mode", mode)
     },
     set(prompt) {
       input.setText(prompt.text)

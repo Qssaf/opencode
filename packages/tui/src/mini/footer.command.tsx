@@ -539,7 +539,6 @@ export function RunCommandMenuBody(props: {
       return
     }
 
-
     if (item.action === "subagent") {
       props.onSubagent()
       return
@@ -949,6 +948,7 @@ export function RunQueuedPromptSelectBody(props: {
   prompts: Accessor<FooterQueuedPrompt[]>
   onClose: () => void
   onSelect: (prompt: FooterQueuedPrompt) => void
+  onMoveBack: (prompt: FooterQueuedPrompt) => void
   onDelete: (prompt: FooterQueuedPrompt) => void
   onRows?: (rows: number) => void
   mono?: boolean
@@ -970,10 +970,21 @@ export function RunQueuedPromptSelectBody(props: {
     onRows: props.onRows,
   })
   const shortcuts = Keymap.useShortcuts()
+  const moveBackShortcut = () => monoShortcut(shortcuts.get("queued_prompt.move_back") ?? "", props.mono ?? false)
   const deleteShortcut = () => monoShortcut(shortcuts.get("queued_prompt.delete") ?? "", props.mono ?? false)
   Keymap.createLayer(() => ({
     priority: 1,
     commands: [
+      {
+        id: "queued_prompt.move_back",
+        title: "Move back",
+        group: "Prompt",
+        run() {
+          const item = controller.items()[controller.menu.selected()]
+          if (!item) return false
+          props.onMoveBack(item.prompt)
+        },
+      },
       {
         id: "queued_prompt.delete",
         title: "Delete pending prompt",
@@ -1000,6 +1011,7 @@ export function RunQueuedPromptSelectBody(props: {
       onQuery={controller.setQuery}
       hint={[
         controller.items()[controller.menu.selected()]?.prompt.delivery === "steer" ? "enter queue" : "enter steer",
+        moveBackShortcut() ? `${moveBackShortcut()} move back` : undefined,
         deleteShortcut() ? `${deleteShortcut()} delete` : undefined,
       ]
         .filter(Boolean)
