@@ -69,6 +69,40 @@ describe("SessionModelRequest Claude output limit", () => {
     }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
   )
 
+  it.effect("leaves space for the prompt near Claude's context window", () =>
+    Effect.gen(function* () {
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      for (const context of [200_000, 1_000_000]) {
+        const prepared = yield* requests.primary({
+          session,
+          agent: Agent.ID.make("build"),
+          model: SessionRunnerModel.resolved(AnthropicMessages.route.model({ id: "claude-sonnet-4-5" }), {
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            cost: [],
+            limit: { context, output: 128_000 },
+          }),
+          system: [],
+          messages: [Message.user("hello")],
+          inputTokens: context - 100_000,
+        })
+        expect((yield* compileRequest(prepared.request)).body.max_tokens).toBe(95_904)
+      }
+      const minimal = yield* requests.primary({
+        session,
+        agent: Agent.ID.make("build"),
+        model: SessionRunnerModel.resolved(AnthropicMessages.route.model({ id: "claude-opus-4-8" }), {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost: [],
+          limit: { context: 200_000, output: 128_000 },
+        }),
+        system: [],
+        messages: [],
+        inputTokens: 196_000,
+      })
+      expect(minimal.request.generation?.maxTokens).toBe(1_025)
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+  )
+
   it.effect("does not change non-primary requests or non-Claude models", () =>
     Effect.gen(function* () {
       const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))

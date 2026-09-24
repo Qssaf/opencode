@@ -181,6 +181,34 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  it.effect("fits Claude's explicit thinking budget below a context-fitted output limit", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLMRequest.update(request, {
+          generation: { maxTokens: 5_000 },
+          providerOptions: { thinking: { type: "enabled", budgetTokens: 32_000 } },
+        }),
+      )
+      expect(prepared.body.max_tokens).toBe(5_000)
+      expect(prepared.body.thinking).toMatchObject({ type: "enabled", budget_tokens: 4_999 })
+      const minimal = yield* compileRequest(
+        LLMRequest.update(request, {
+          generation: { maxTokens: 1_025 },
+          providerOptions: { thinking: { type: "enabled", budgetTokens: 32_000 } },
+        }),
+      )
+      expect(minimal.body.thinking).toMatchObject({ type: "enabled", budget_tokens: 1_024 })
+      const otherModel = yield* compileRequest(
+        LLMRequest.update(request, {
+          model: AnthropicMessages.route.model({ id: "kimi-k2" }),
+          generation: { maxTokens: 5_000 },
+          providerOptions: { thinking: { type: "enabled", budgetTokens: 32_000 } },
+        }),
+      )
+      expect(otherModel.body.thinking).toMatchObject({ type: "enabled", budget_tokens: 32_000 })
+    }),
+  )
+
   it.effect("lowers passthrough provider options and accepts either key spelling", () =>
     Effect.gen(function* () {
       const snake = yield* compileRequest(

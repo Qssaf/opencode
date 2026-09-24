@@ -1064,6 +1064,16 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
   }
   const output_config =
     updates.effort === undefined && format === undefined ? undefined : { effort: updates.effort, format }
+  const maxTokens = generation?.maxTokens ?? DEFAULT_MAX_TOKENS
+  // A context-fitted Claude output limit can fall below a configured thinking budget.
+  // Anthropic requires budget_tokens < max_tokens, with a minimum budget of 1,024.
+  const thinking =
+    /(?:^|[./])claude-/.test(request.model.id.toLowerCase()) &&
+    options.thinking?.type === "enabled" &&
+    maxTokens > 1_024 &&
+    options.thinking.budget_tokens >= maxTokens
+      ? { ...options.thinking, budget_tokens: maxTokens - 1 }
+      : options.thinking
   const body = {
     model: request.model.id,
     system,
@@ -1071,12 +1081,12 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
     tools,
     tool_choice: toolChoice,
     stream: true as const,
-    max_tokens: generation?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    max_tokens: maxTokens,
     temperature: generation?.temperature,
     top_p: generation?.topP,
     top_k: generation?.topK,
     stop_sequences: generation?.stop,
-    thinking: applyThinkingBindingDefault(request.model, options.thinking),
+    thinking: applyThinkingBindingDefault(request.model, thinking),
     output_config,
     // top-level passthrough per SDK MessageCreateParamsBase:4638,4643,4649,4654,4670
     cache_control: options.cache_control ?? options.cacheControl,

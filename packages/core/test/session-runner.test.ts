@@ -2971,6 +2971,37 @@ describe("SessionRunnerLLM", () => {
     expect(yield* s.context).not.toContainEqual(expect.objectContaining({ type: "compaction" }))
   })
 
+  scenario("fits Claude's output request when compaction has not yet triggered", function* (s) {
+    const id = "claude-sonnet-4-5-context-fixture"
+    s.currentModel = AnthropicMessages.route.model({ id })
+    modelLimits.set(id, { context: 100_000, output: 80_000 })
+    yield* s.llm.push(TestLLM.text("Done", "claude-context-response"))
+    yield* s.runPrompt("x".repeat(160_000))
+
+    expect(s.requests).toHaveLength(1)
+    expect(s.requests[0]?.generation?.maxTokens).toBeGreaterThan(10_000)
+    expect(s.requests[0]?.generation?.maxTokens).toBeLessThan(60_000)
+    expect(yield* s.context).not.toContainEqual(expect.objectContaining({ type: "compaction" }))
+  })
+
+  scenario("records context-window truncation as a length finish without auto-continuation", function* (s) {
+    s.currentModel = AnthropicMessages.route.model({ id: "claude-sonnet-4-5" })
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "model_context_window_exceeded" } },
+        LLMEvent.textStart({ id: "truncated" }),
+        LLMEvent.textDelta({ id: "truncated", text: "Partial answer" }),
+        LLMEvent.textEnd({ id: "truncated" }),
+      ),
+    )
+    yield* s.runPrompt("Long conversation")
+
+    expect(s.requests).toHaveLength(1)
+    expect(yield* s.context).toContainEqual(
+      expect.objectContaining({ type: "assistant", finish: "length", rawFinish: "model_context_window_exceeded" }),
+    )
+  })
+
   scenario("stops after required automatic compaction fails", function* (s) {
     yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "text-before-failed-compaction", 3_950))
     yield* s.runPrompt("Earlier question ".repeat(180))

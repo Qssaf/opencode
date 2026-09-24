@@ -46,6 +46,9 @@ const IMAGE_REMOVED =
 const GENERATION_KEYS = new Set(Object.keys(GenerationOptions.fields))
 const CLAUDE_OUTPUT_CAP = 128_000
 const ANTHROPIC_DEFAULT_OUTPUT = 32_000
+const CONTEXT_MARGIN = 4_096
+// Manual Anthropic thinking requires at least 1,024 tokens and must be strictly below max_tokens.
+const MIN_OUTPUT = 1_025
 
 /** Tool errors, plus the user declining a permission or dismissing a question. */
 export type ExecuteError = Tool.Error | Permission.DeclinedError | QuestionTool.CancelledError
@@ -71,7 +74,12 @@ export interface Input {
   readonly toolChoice?: LLM.RequestInput["toolChoice"]
   /** Only the durable runner may use a stateful WebSocket. */
   readonly webSocket?: "session"
+  /** Estimated prompt size for fitting Claude's requested output into its context window. */
+  readonly inputTokens?: number
 }
+
+export const isClaudeMessages = (model: SessionRunnerModel.Resolved) =>
+  model.model.route.protocol === "anthropic-messages" && /(?:^|[./])claude-/.test(model.model.id.toLowerCase())
 
 export const baseTranscript = (input: {
   readonly agent: Agent.Info
@@ -220,21 +228,21 @@ export const layer = Layer.effect(
       const given = new Map(
         tools.definitions.map((t) => [{ description: t.description, input: { ...t.inputSchema } }, t] as const),
       )
-      // Temporary Claude Messages limit until the context-aware policy in #51021 lands.
+      // Temporary Claude Messages limit until the provider-wide policy in #51021 lands.
       // Leave other models and request kinds on their existing provider defaults.
-      const claudeMessages =
-        kind === "primary" &&
-        model.model.route.protocol === "anthropic-messages" &&
-        /(?:^|[./])claude-/.test(model.model.id.toLowerCase())
+      const claudeMessages = kind === "primary" && isClaudeMessages(model)
+      const outputLimit = Math.min(model.limit.output || ANTHROPIC_DEFAULT_OUTPUT, CLAUDE_OUTPUT_CAP)
+      const maxTokens =
+        input.inputTokens === undefined || model.limit.context <= 0
+          ? outputLimit
+          : Math.min(outputLimit, Math.max(MIN_OUTPUT, model.limit.context - input.inputTokens - CONTEXT_MARGIN))
       const shaped = yield* shape(
         {
           sessionID: session.id,
           model: model.ref,
           system: input.system,
           messages: input.messages,
-          options: claudeMessages
-            ? { maxTokens: Math.min(model.limit.output || ANTHROPIC_DEFAULT_OUTPUT, CLAUDE_OUTPUT_CAP) }
-            : {},
+          options: claudeMessages ? { maxTokens } : {},
         },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
       )
