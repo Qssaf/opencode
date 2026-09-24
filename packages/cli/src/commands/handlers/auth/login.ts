@@ -74,30 +74,40 @@ const findIntegration = Effect.fn("cli.auth.login.integration")(function* (clien
   }
   const integrations = yield* loadIntegrations(client)
   if (target) return yield* resolveIntegration(integrations, target)
-  const available = integrations
+  const options = loginOptions(integrations)
+  if (options.length === 0) return yield* Effect.fail(new Error("No authentication integrations are available"))
+  const id = yield* prompt<string>(() =>
+    autocomplete({
+      message: "Select an AI provider or MCP server",
+      maxItems: 8,
+      options,
+    }),
+  )
+  return yield* resolveIntegration(integrations, id)
+})
+
+export function loginOptions(integrations: IntegrationInfo[]) {
+  return integrations
     .filter((integration) => connectMethods(integration).length > 0)
     .toSorted(
       (a, b) =>
+        Number(b.metadata?.source === "mcp") - Number(a.metadata?.source === "mcp") ||
         (integrationPriority.get(a.id) ?? integrationPriority.size) -
           (integrationPriority.get(b.id) ?? integrationPriority.size) ||
         a.name.localeCompare(b.name) ||
         a.id.localeCompare(b.id),
     )
-  if (available.length === 0) return yield* Effect.fail(new Error("No authentication integrations are available"))
-  const id = yield* prompt<string>(() =>
-    autocomplete({
-      message: "Select integration",
-      maxItems: 8,
-      options: available.map((integration) => {
-        const option = { value: integration.id, label: integration.name, hint: integration.id }
-        if (integration.connections.length > 0) return { ...option, hint: "connected" }
-        if (integration.id === "opencode") return { ...option, hint: "recommended" }
-        return option
-      }),
-    }),
-  )
-  return yield* resolveIntegration(available, id)
-})
+    .map((integration) => ({
+      value: integration.id,
+      label: `${integration.metadata?.source === "mcp" ? "MCP server" : "AI provider"} · ${integration.name}`,
+      hint:
+        integration.connections.length > 0
+          ? "connected"
+          : integration.id === "opencode"
+            ? "recommended"
+            : integration.id,
+    }))
+}
 
 const chooseMethod = Effect.fn("cli.auth.login.method")(function* (methods: ConnectMethod[], target?: string) {
   if (target) return yield* resolveMethod(methods, target)
