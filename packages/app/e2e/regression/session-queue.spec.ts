@@ -254,7 +254,7 @@ test("Move Back cancels only the selected queued prompt and focuses the restored
   ).toEqual(["Steer", "Move Back", "Remove"])
   const moveBack = row.getByRole("button", { name: "Move Back" })
   await expect(moveBack).toHaveText("")
-  await expect(moveBack.locator("svg use")).toHaveAttribute("href", "#opencode-v2-icon-reset")
+  await expect(moveBack.locator("svg use")).toHaveAttribute("href", "#opencode-v2-icon-arrow-undo-down")
   await moveBack.hover()
   await expect(page.getByRole("tooltip")).toHaveText("Move Back")
   await moveBack.click()
