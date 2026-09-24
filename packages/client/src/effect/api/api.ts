@@ -226,6 +226,20 @@ export type SessionForkInput = { readonly sessionID: Session.ID; readonly before
 export type SessionForkOutput = Session.Info
 export type SessionForkOperation<E = never> = (input: SessionForkInput) => Effect.Effect<SessionForkOutput, E>
 
+export type SessionSubagentInput = {
+  readonly sessionID: Session.ID
+  readonly text: string
+  readonly description: string
+  readonly agent?: Agent.ID | undefined
+  readonly model?: Model.Ref | undefined
+  readonly fork?: boolean | undefined
+  readonly resume?: boolean | undefined
+}
+export type SessionSubagentOutput = Session.Info
+export type SessionSubagentOperation<E = never> = (
+  input: SessionSubagentInput,
+) => Effect.Effect<SessionSubagentOutput, E>
+
 export type SessionSwitchAgentInput = { readonly sessionID: Session.ID; readonly agent: Agent.ID }
 export type SessionSwitchAgentOutput = void
 export type SessionSwitchAgentOperation<E = never> = (
@@ -589,6 +603,7 @@ export type SessionLogOutput =
             readonly sessionID: Session.ID
             readonly parentID: Session.ID
             readonly boundary: Session.ForkBoundary
+            readonly child?: boolean | undefined
             readonly instructions?:
               | { readonly [x: string & Brand.Brand<"Instruction.Key">]: string & Brand.Brand<"Instruction.Hash"> }
               | undefined
@@ -1409,6 +1424,7 @@ export interface SessionApi<E = never> {
   readonly get: SessionGetOperation<E>
   readonly remove: SessionRemoveOperation<E>
   readonly fork: SessionForkOperation<E>
+  readonly subagent: SessionSubagentOperation<E>
   readonly switchAgent: SessionSwitchAgentOperation<E>
   readonly switchModel: SessionSwitchModelOperation<E>
   readonly update: SessionUpdateOperation<E>

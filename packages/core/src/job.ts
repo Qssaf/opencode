@@ -23,6 +23,8 @@ const Background = Schema.Struct({
       childSessionID: SessionSchema.ID,
       agent: Schema.String,
       description: Schema.String,
+      /** False admits the completion notice without resuming the parent. */
+      resume: Schema.optionalKey(Schema.Boolean),
     }),
   ]),
   status: Schema.Literals(["running", "completed", "error", "cancelled"]),

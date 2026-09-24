@@ -17,6 +17,7 @@ import { Event } from "@opencode/schema/event"
 import { Context, Effect, Encoding, Result, Schema, SchemaGetter, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import {
+  AgentNotFoundError,
   ConflictError,
   CommandExecutionError,
   CommandNotFoundError,
@@ -319,6 +320,30 @@ export const makeSessionGroup = <
             summary: "Fork session",
             description:
               "Create a child session by copying projected history before a message. Omit before to copy the full history.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.subagent", "/api/session/:sessionID/subagent", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          text: Schema.String,
+          description: Schema.String,
+          agent: Agent.ID.pipe(Schema.optional),
+          model: Model.Ref.pipe(Schema.optional),
+          fork: Schema.Boolean.pipe(Schema.optional),
+          resume: Schema.Boolean.pipe(Schema.optional),
+        }),
+        success: Schema.Struct({ data: PublicSessionInfo }),
+        error: [SessionNotFoundError, AgentNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.subagent",
+            summary: "Start subagent",
+            description:
+              "Start a background subagent in a child session and deliver its outcome to this session when it settles. Set fork to copy this session's settled history into the child. Set resume to false to admit the outcome without resuming this session.",
           }),
         ),
     )

@@ -1811,6 +1811,7 @@ export type SessionForked = {
     sessionID: string
     parentID: string
     boundary: SessionForkBoundary
+    child?: boolean
     instructions?: { [x: string]: string }
     instructionEntries?: InstructionEntrySnapshot
   }
@@ -3937,6 +3938,60 @@ export type SessionForkInput = {
 }
 
 export type SessionForkOutput = { data: SessionInfo }["data"]
+
+export type SessionSubagentInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly text: {
+    readonly text: string
+    readonly description: string
+    readonly agent?: string | null
+    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+    readonly fork?: boolean | null
+    readonly resume?: boolean | null
+  }["text"]
+  readonly description: {
+    readonly text: string
+    readonly description: string
+    readonly agent?: string | null
+    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+    readonly fork?: boolean | null
+    readonly resume?: boolean | null
+  }["description"]
+  readonly agent?: {
+    readonly text: string
+    readonly description: string
+    readonly agent?: string | null
+    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+    readonly fork?: boolean | null
+    readonly resume?: boolean | null
+  }["agent"]
+  readonly model?: {
+    readonly text: string
+    readonly description: string
+    readonly agent?: string | null
+    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+    readonly fork?: boolean | null
+    readonly resume?: boolean | null
+  }["model"]
+  readonly fork?: {
+    readonly text: string
+    readonly description: string
+    readonly agent?: string | null
+    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+    readonly fork?: boolean | null
+    readonly resume?: boolean | null
+  }["fork"]
+  readonly resume?: {
+    readonly text: string
+    readonly description: string
+    readonly agent?: string | null
+    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+    readonly fork?: boolean | null
+    readonly resume?: boolean | null
+  }["resume"]
+}
+
+export type SessionSubagentOutput = { data: SessionInfo }["data"]
 
 export type SessionSwitchAgentInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

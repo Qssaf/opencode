@@ -160,6 +160,7 @@ export type SessionDomain = Pick<
   | "generate"
   | "command"
   | "synthetic"
+  | "subagent"
   | "interrupt"
   | "update"
   | "move"

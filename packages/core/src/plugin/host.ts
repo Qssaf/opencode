@@ -542,6 +542,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
       }),
       move: sessions.move,
       synthetic: sessions.synthetic,
+      subagent: sessions.subagent,
       interrupt: (input) =>
         sessions
           .interrupt(input.sessionID, { resume: input.resume })

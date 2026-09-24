@@ -36,6 +36,8 @@ import type {
   SessionRemoveOutput,
   SessionForkInput,
   SessionForkOutput,
+  SessionSubagentInput,
+  SessionSubagentOutput,
   SessionSwitchAgentInput,
   SessionSwitchAgentOutput,
   SessionSwitchModelInput,
@@ -435,6 +437,24 @@ const EndpointSessionFork = (raw: RawClient["server.session"]) => (input: Sessio
     ),
   )
 
+const EndpointSessionSubagent = (raw: RawClient["server.session"]) => (input: SessionSubagentInput) =>
+  preserveEffect<SessionSubagentOutput>()(
+    raw["session.subagent"]({
+      params: { sessionID: input["sessionID"] },
+      payload: {
+        text: input["text"],
+        description: input["description"],
+        agent: input["agent"],
+        model: input["model"],
+        fork: input["fork"],
+        resume: input["resume"],
+      },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointSessionSwitchAgent = (raw: RawClient["server.session"]) => (input: SessionSwitchAgentInput) =>
   preserveEffect<SessionSwitchAgentOutput>()(
     raw["session.switchAgent"]({ params: { sessionID: input["sessionID"] }, payload: { agent: input["agent"] } }).pipe(
@@ -747,6 +767,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   get: EndpointSessionGet(raw),
   remove: EndpointSessionRemove(raw),
   fork: EndpointSessionFork(raw),
+  subagent: EndpointSessionSubagent(raw),
   switchAgent: EndpointSessionSwitchAgent(raw),
   switchModel: EndpointSessionSwitchModel(raw),
   update: EndpointSessionUpdate(raw),

@@ -36,7 +36,7 @@ export const deliver = Effect.fnUntraced(function* (
   yield* sessions.synthetic({
     ...(input.notificationID ? { id: input.notificationID } : {}),
     sessionID: recovery.parentSessionID,
-    ...(input.resume === false ? { resume: false } : {}),
+    ...((input.resume ?? recovery.resume) === false ? { resume: false } : {}),
     description: recovery.description,
     text: `<subagent sessionID="${recovery.childSessionID}" state="${input.status}" description="${recovery.description}">\n${text}\n</subagent>`,
     metadata: { source: "subagent", childID: recovery.childSessionID, agent: recovery.agent, state: input.status },

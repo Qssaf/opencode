@@ -9,6 +9,7 @@ import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "@opencode/protocol/groups/session"
 import {
+  AgentNotFoundError,
   ConflictError,
   CommandExecutionError,
   CommandNotFoundError,
@@ -229,6 +230,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag(
                 "Session.ForkEmptyError",
                 (error) => new InvalidRequestError({ message: error.message, kind: "empty_session" }),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
+        "session.subagent",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.subagent({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
+              Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag(
+                "Session.AgentNotFoundError",
+                (error) => new AgentNotFoundError({ agentID: error.agent, message: error.message }),
               ),
             ),
           }

@@ -26,6 +26,7 @@ import { SessionRunner } from "./session/runner/index.js"
 import { SessionStore } from "./session/store.js"
 import { SessionExecution } from "./session/execution.js"
 import {
+  AgentNotFoundError,
   AttachmentError,
   BusyError,
   CompactionConflictError,
@@ -45,6 +46,8 @@ import { SessionInbox } from "./session/inbox.js"
 import { InstructionState } from "./session/instruction-state.js"
 import { SessionGenerate } from "./session/generate.js"
 import { SessionCommand } from "./session/command.js"
+import { SessionSubagent } from "./session/subagent.js"
+import { SubagentJob } from "./session/subagent-job.js"
 import {
   SessionMove,
   DestinationNotFoundError,
@@ -95,9 +98,12 @@ type CompactInput = Parameters<Session.Handle["compact"]>[0] & { sessionID: Sess
 type ForkInput = {
   sessionID: SessionSchema.ID
   before?: SessionMessage.ID
+  /** Makes the fork a child of the source session instead of a top-level session. */
+  child?: boolean
 }
 
 export {
+  AgentNotFoundError,
   AttachmentError,
   BusyError,
   CompactionConflictError,
@@ -187,6 +193,10 @@ export interface Interface {
     sessionID: SessionSchema.ID
     prompt: string
   }) => Effect.Effect<string, NotFoundError | SessionGenerate.Error>
+  /** Starts a background subagent in a child Session and delivers its outcome to the parent when it settles. */
+  readonly subagent: (
+    input: SessionSubagent.Input,
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | AgentNotFoundError>
   readonly command: (input: {
     sessionID: SessionSchema.ID
     command: string
@@ -341,6 +351,7 @@ const layer = Layer.effect(
           sessionID,
           parentID: parent.id,
           boundary: { type: input.before ? "before" : "through", messageID: boundary.id },
+          ...(input.child ? { child: true } : {}),
           ...inherited,
         })
         return yield* result.get(sessionID).pipe(Effect.orDie)
@@ -410,6 +421,8 @@ const layer = Layer.effect(
           Effect.provideService(LLMClient.Service, llm),
         )
       }),
+      subagent: (input) =>
+        SessionSubagent.spawn(result, subagents, input).pipe(Effect.provideService(Instance.Service, instances)),
       command: Effect.fn("Session.command")(function* (input) {
         const session = yield* result.get(input.sessionID)
         return yield* SessionCommand.execute({ ...input, session }).pipe(
@@ -454,6 +467,7 @@ const layer = Layer.effect(
         commit: (sessionID) => sessions.forSession(sessionID).revert.commit(),
       },
     })
+    const subagents = yield* SubagentJob.make.pipe(Effect.provideService(Service, result))
 
     return result
   }),

@@ -7,7 +7,7 @@ import { SubagentCompletion } from "./subagent-completion.js"
 
 type Recovery = Extract<Job.Recovery, { kind: "subagent" }>
 
-interface Runner {
+export interface Runner {
   start: (recovery: Recovery) => Effect.Effect<Job.Info>
   background: (recovery: Recovery) => Effect.Effect<void>
   notify: (recovery: Recovery, startedAt: number) => Effect.Effect<void>

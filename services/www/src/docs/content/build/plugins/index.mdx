@@ -766,6 +766,13 @@ const command = await ctx.session.command({ sessionID, command: "review", argume
 const synthetic = await ctx.session.synthetic({ sessionID, text: "Deployment completed" })
 ```
 
+Start a background subagent in a child session. Set `fork` to copy the session's settled history into the child. The
+subagent's outcome is added to the parent when it settles; set `resume` to `false` to add it without resuming the parent.
+
+```ts
+const child = await ctx.session.subagent({ sessionID, text: "Update the docs", description: "Update docs", fork: true })
+```
+
 Rename, interrupt, or wait for a session.
 
 ```ts
@@ -790,6 +797,7 @@ interface SessionContext {
   generate(input: SessionGenerateInput, requestOptions?: RequestOptions): Promise<{ text: string }>
   command(input: SessionCommandInput, requestOptions?: RequestOptions): Promise<SessionInboxUser>
   synthetic(input: SessionSyntheticInput, requestOptions?: RequestOptions): Promise<SessionInboxSynthetic>
+  subagent(input: SessionSubagentInput, requestOptions?: RequestOptions): Promise<SessionInfo>
   interrupt(input: SessionInterruptInput, requestOptions?: RequestOptions): Promise<void>
   rename(input: SessionRenameInput, requestOptions?: RequestOptions): Promise<void>
   wait(input: SessionWaitInput, requestOptions?: RequestOptions): Promise<void>

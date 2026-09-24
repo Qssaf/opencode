@@ -197,6 +197,8 @@ export const Forked = Event.durable({
     ...Base,
     parentID: SessionID,
     boundary: SessionFork.Boundary,
+    /** The fork is a child of its source session, such as a forked subagent. */
+    child: Schema.Boolean.pipe(optional),
     instructions: Instruction.Values.pipe(optional),
     instructionEntries: InstructionEntry.Snapshot.pipe(optional),
   },
