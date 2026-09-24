@@ -50,6 +50,8 @@ export interface SessionCompaction extends SessionContext {
 export interface SessionGenerate extends SessionContext {}
 
 export interface SessionTitle extends SessionRequest {
+  /** Replace to run the title request on a different catalog model. */
+  model: Model.Ref
   /** Set to use this title and skip the model request. */
   result?: string
 }

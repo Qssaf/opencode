@@ -22,10 +22,11 @@ import { SessionModelRequest } from "@opencode/core/session/model-request"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { SessionProviderContext } from "@opencode/core/session/provider-context"
 import { SessionRunnerModel } from "@opencode/core/session/runner/model"
+import { Model } from "@opencode/core/model"
 import { SessionSchema } from "@opencode/core/session/schema"
 import { SessionStore } from "@opencode/core/session/store"
 import { LayerNode } from "@opencode/util/effect/layer-node"
-import { DateTime, Deferred, Effect, Fiber, Schema } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Layer, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 import { host } from "./plugin/host"
 
@@ -42,7 +43,11 @@ const it = testEffect(
       PluginHooks.node,
       llmClient,
     ]),
-    [Bus.node.replace(Bus.configured({ persist: true }))],
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      SessionRunnerModel.node.replace(Layer.mock(SessionRunnerModel.Service)({ resolve: () => Effect.die("unused") })),
+      Model.node.replace(Layer.mock(Model.Service, { all: () => Effect.succeed([]) })),
+    ],
   ),
 )
 

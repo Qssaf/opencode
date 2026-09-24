@@ -5,6 +5,7 @@ import { Money } from "@opencode/schema/money"
 import { Session } from "@opencode/schema/session"
 import type { SessionRequestKind } from "@opencode/plugin/effect/session"
 import { Location } from "@opencode/core/location"
+import { ModelResolver } from "@opencode/core/model-resolver"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { Project } from "@opencode/core/project"
 import { AbsolutePath } from "@opencode/core/schema"
@@ -54,7 +55,11 @@ describe("SessionModelRequest HTTP hooks", () => {
           seen.push({ hook: "response", kind: event.kind, agent: event.agent })
         }),
       )
-      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const requests = yield* SessionModelRequest.Service.pipe(
+        Effect.provide(SessionModelRequest.layer),
+        Effect.provide(SessionRunnerModel.layer),
+        Effect.provide(ModelResolver.layer),
+      )
 
       for (const kind of KINDS) {
         const prepared = yield* requests[kind]({
@@ -125,6 +130,8 @@ describe("SessionModelRequest HTTP hooks", () => {
       })
       const requests = yield* SessionModelRequest.Service.pipe(
         Effect.provide(SessionModelRequest.layer),
+        Effect.provide(SessionRunnerModel.layer),
+        Effect.provide(ModelResolver.layer),
         Effect.provideService(SessionModelTransport.Service, websocketTransport),
       )
       const prepared = yield* requests.primary({

@@ -10,6 +10,7 @@ import { Location } from "@opencode/core/location"
 import { Model } from "@opencode/core/model"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHost } from "@opencode/core/plugin/host"
+import { ModelResolver } from "@opencode/core/model-resolver"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { GithubCopilotPlugin } from "@opencode/core/plugin/provider/github-copilot"
 import { OpenAIPlugin } from "@opencode/core/plugin/provider/openai"
@@ -264,6 +265,8 @@ describe("OpenAIPlugin", () => {
           })
         }).pipe(
           Effect.provide(SessionModelRequest.layer),
+          Effect.provide(SessionRunnerModel.layer),
+          Effect.provide(ModelResolver.layer),
           Effect.provideService(SessionModelTransport.Service, transport),
         )
 

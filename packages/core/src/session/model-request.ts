@@ -20,12 +20,13 @@ import type {
   SessionTitle,
 } from "@opencode/plugin/effect/session"
 import type { Agent } from "@opencode/schema/agent"
-import type { Model } from "@opencode/schema/model"
 import type { Content } from "@opencode/schema/tool"
+import { isDeepStrictEqual } from "node:util"
 import { Cause, Context, Effect, Layer, Result, Stream } from "effect"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { App } from "../app.js"
+import { Model } from "../model.js"
 import { Permission } from "../permission.js"
 import { PluginHooks } from "../plugin/hooks.js"
 import { QuestionTool } from "../tool/plugin/question.js"
@@ -49,6 +50,8 @@ export type ExecuteError = Tool.Error | Permission.DeclinedError | QuestionTool.
 
 export interface Prepared<Event = SessionRequest> {
   readonly event: Event
+  /** The model the request runs on; a hook may have replaced the requested one. */
+  readonly model: SessionRunnerModel.Resolved
   readonly request: LLMRequest
   readonly options: StreamOptions
   readonly retry: (event: PluginHooks.Domains["session"]["retry"]) => Effect.Effect<void>
@@ -198,12 +201,12 @@ export const layer = Layer.effect(
     const hooks = yield* PluginHooks.Service
     const transport = yield* SessionModelTransport.Service
     const app = yield* App.Metadata
+    const models = yield* SessionRunnerModel.Service
+    const catalog = yield* Model.Service
     const prepare = Effect.fn("SessionModelRequest.prepare")(function* <
       S extends SessionRequest & { tools?: Definitions },
     >(kind: SessionRequestKind, input: Input, shape: (draft: SessionRequest, tools: Definitions) => Effect.Effect<S>) {
       const session = input.session
-      const model = input.model
-      const scope = { sessionID: session.id, agent: input.agent, model: model.ref, kind }
       const tools = input.tools ?? {
         definitions: [],
         execute: () => new Tool.Error({ message: "Tools are not available for this request" }),
@@ -214,9 +217,18 @@ export const layer = Layer.effect(
         tools.definitions.map((t) => [{ description: t.description, input: { ...t.inputSchema } }, t] as const),
       )
       const shaped = yield* shape(
-        { sessionID: session.id, model: model.ref, system: input.system, messages: input.messages, options: {} },
+        { sessionID: session.id, model: input.model.ref, system: input.system, messages: input.messages, options: {} },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
       )
+      // A hook may point the request at another catalog model, including picker-disabled ones.
+      // Resolution failure keeps the requested model rather than failing the request.
+      const model = isDeepStrictEqual(shaped.model, input.model.ref)
+        ? input.model
+        : yield* models.resolve({ ...session, model: shaped.model }, catalog.all).pipe(
+            Effect.tapError((cause) => Effect.logWarning("ignoring unresolvable hook model", { cause })),
+            Effect.orElseSucceed(() => input.model),
+          )
+      const scope = { sessionID: session.id, agent: input.agent, model: model.ref, kind }
       // Match by identity first, then by key. Entries matching neither were invented by a
       // hook and are dropped. `t.name` stays the real name so execution can map renames back.
       const byName = new Map(tools.definitions.map((t) => [t.name, t]))
@@ -342,6 +354,7 @@ export const layer = Layer.effect(
 
       return {
         event: shaped,
+        model,
         request,
         options: { ...(http ? { http } : {}), ...(webSocket ? { webSocket } : {}) },
         retry: (event: Parameters<Prepared["retry"]>[0]) =>
@@ -382,5 +395,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [PluginHooks.node, SessionModelTransport.node, App.node],
+  deps: [PluginHooks.node, SessionModelTransport.node, App.node, SessionRunnerModel.node, Model.node],
 })

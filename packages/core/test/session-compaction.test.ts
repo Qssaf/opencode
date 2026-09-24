@@ -88,7 +88,12 @@ const it = testEffect(
       SessionModelRequest.node,
       PluginHooks.node,
     ]),
-    [Bus.node.replace(Bus.configured({ persist: true })), llmClient.replace(client)],
+    [
+      Bus.node.replace(Bus.configured({ persist: true })),
+      llmClient.replace(client),
+      SessionRunnerModel.node.replace(Layer.mock(SessionRunnerModel.Service)({ resolve: () => Effect.die("unused") })),
+      Model.node.replace(Layer.mock(Model.Service, { all: () => Effect.succeed([]) })),
+    ],
   ),
 )
 

@@ -11,6 +11,7 @@ import { SessionEvent } from "@opencode/core/session/event"
 import { SessionMessage } from "@opencode/core/session/message"
 import { SessionModelRequest } from "@opencode/core/session/model-request"
 import { SessionRunnerModel } from "@opencode/core/session/runner/model"
+import { Model } from "@opencode/core/model"
 import { Session } from "@opencode/core/session"
 import { Agent } from "@opencode/core/agent"
 import { Location } from "@opencode/core/location"
@@ -46,6 +47,8 @@ const it = testEffect(
         }),
       ),
       Config.node.replace(config),
+      SessionRunnerModel.node.replace(Layer.mock(SessionRunnerModel.Service)({ resolve: () => Effect.die("unused") })),
+      Model.node.replace(Layer.mock(Model.Service, { all: () => Effect.succeed([]) })),
     ]),
   ),
 )

@@ -102,6 +102,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 })
 const smallModels = Layer.mock(Model.Service, {
   small: () => Effect.succeed(selectedSmall),
+  all: () => Effect.succeed([]),
 })
 const it = testEffect(
   AppNodeBuilder.build(
@@ -282,6 +283,30 @@ it.effect("uses a hook-provided title without a model request", () =>
     expect(requests).toHaveLength(0)
     const store = yield* SessionStore.Service
     expect((yield* store.get(sessionID))?.title).toBe("Plugin Title")
+  }),
+)
+
+it.effect("runs the request on a hook-replaced model", () =>
+  Effect.gen(function* () {
+    yield* enableTitleAgent
+    const sessionID = Session.ID.make("ses_title_hook_model")
+    yield* insertSession(sessionID)
+    yield* prompt(sessionID, "Hello")
+
+    const hooks = yield* PluginHooks.Service
+    yield* hooks.register("session", "title", (event) =>
+      Effect.sync(() => {
+        event.model = Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("title-small") })
+      }),
+    )
+
+    const title = yield* SessionTitle.Service
+    yield* title.generate(sessionID)
+
+    expect(requests.map((request) => String(request.model.id))).toEqual(["title-small"])
+    expect(selections.at(-1)).toEqual(Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("title-small") }))
+    const store = yield* SessionStore.Service
+    expect((yield* store.get(sessionID))?.title).toBe("Generated Title")
   }),
 )
 

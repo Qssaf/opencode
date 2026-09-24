@@ -80,7 +80,7 @@ export const resolved = (
   transport: options.transport,
 })
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const resolver = yield* ModelResolver.Service
