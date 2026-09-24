@@ -172,6 +172,12 @@ const hasInputUsage = (message: SessionMessage.Info) =>
   message.tokens.input + message.tokens.cache.read + message.tokens.cache.write > 0
 
 export const estimateTokens = (input: RequiredInput) => {
+  const prompt = estimatePrompt(input)
+  return prompt.measured + prompt.estimated
+}
+
+/** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
+export const estimatePrompt = (input: RequiredInput) => {
   const index = input.messages.findLastIndex(hasInputUsage)
   const last = input.messages[index]
   // Keep the anchor's local tool results: they are not covered by its provider usage.
@@ -182,14 +188,15 @@ export const estimateTokens = (input: RequiredInput) => {
     .filter((message) => message.role !== "assistant" || message.id !== last?.id)
     .reduce((sum, message) => sum + message.content.reduce((sum, part) => sum + estimatePart(part), 0), 0)
   if (last?.type === "assistant" && last.tokens)
-    return (
-      added +
-      last.tokens.input +
-      last.tokens.cache.read +
-      last.tokens.cache.write +
-      last.tokens.output +
-      last.tokens.reasoning
-    )
+    return {
+      measured:
+        last.tokens.input +
+        last.tokens.cache.read +
+        last.tokens.cache.write +
+        last.tokens.output +
+        last.tokens.reasoning,
+      estimated: added,
+    }
   const transcript = SessionModelRequest.baseTranscript({
     agent: input.context.agent.info,
     model: input.resolved,
@@ -197,14 +204,16 @@ export const estimateTokens = (input: RequiredInput) => {
     initial: input.context.initial,
     messages: [],
   })
-  return (
-    added +
-    transcript.system.reduce((sum, part) => sum + Token.estimate(part.text), 0) +
-    input.context.tools.definitions.reduce(
-      (sum, tool) => sum + Token.estimate(tool.name + tool.description + JSON.stringify(tool.inputSchema)),
-      0,
-    )
-  )
+  return {
+    measured: 0,
+    estimated:
+      added +
+      transcript.system.reduce((sum, part) => sum + Token.estimate(part.text), 0) +
+      input.context.tools.definitions.reduce(
+        (sum, tool) => sum + Token.estimate(tool.name + tool.description + JSON.stringify(tool.inputSchema)),
+        0,
+      ),
+  }
 }
 
 const estimateMedia = (mime: string) => {
@@ -470,6 +479,7 @@ export const layer = Layer.effect(
       input: ExecuteInput,
       messages: readonly SessionMessage.Info[],
       webSocket?: "session",
+      summaryPrompt?: string,
     ) => {
       const context = input.context
       const transcript = SessionModelRequest.baseTranscript({
@@ -479,6 +489,7 @@ export const layer = Layer.effect(
         initial: context.initial,
         messages,
       })
+      const prompt = estimatePrompt({ messages, resolved: context.model, context })
       return input.prepare({
         session: context.session,
         agent: context.agent.id,
@@ -490,6 +501,11 @@ export const layer = Layer.effect(
           ...(input.instructionUpdate ? [Message.system(input.instructionUpdate)] : []),
         ],
         webSocket,
+        // The instruction update and summary prompt are sent outside the history, so count them too.
+        inputTokens: {
+          measured: prompt.measured,
+          estimated: prompt.estimated + Token.estimate((input.instructionUpdate ?? "") + (summaryPrompt ?? "")),
+        },
       })
     }
     /** The durable transcript since the last local summary, re-expanding every native window. */
@@ -623,11 +639,12 @@ export const layer = Layer.effect(
       )
       // Checkpoints from the previous template ran far longer than this one asks for; its catch-all heading identifies them.
       const legacy = previous?.summary.includes(LEGACY_HEADING) ?? false
-      const prepared = yield* compactionRequest(input, history.messages)
+      const summaryPrompt = buildPrompt(previous !== undefined, legacy)
+      const prepared = yield* compactionRequest(input, history.messages, undefined, summaryPrompt)
       if (prepared.event.result) return yield* supplied(input, prepared.event.result, history.recent)
       // Hooks see the transcript alone; the summary prompt is appended after they run.
       const first = LLMRequest.update(prepared.request, {
-        messages: [...prepared.request.messages, Message.user(buildPrompt(previous !== undefined, legacy))],
+        messages: [...prepared.request.messages, Message.user(summaryPrompt)],
       })
       // Both requests share the retry allowance; rejected output never enters the reminder request.
       const transient = SessionRunnerRetry.transient(yield* SessionRunnerRetry.policy(context.session.id), {
