@@ -37,12 +37,17 @@ import { toLLMMessages } from "./runner/to-llm-message.js"
 import type { AgentNotFoundError } from "./error.js"
 import type { Instructions } from "../instructions/index.js"
 
-const DEFAULT_BUFFER = 20_000
+const AUTO_THRESHOLD = 0.9
 const DEFAULT_KEEP_TOKENS = 15_000
-const OUTPUT_TOKEN_MAX = 32_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
+const FALLBACK_TOOL_CHARS = 1_000
+const FALLBACK_OVERFLOW_RETRIES = 3
 const IMAGE_TOKEN_ESTIMATE = 1_500
 const PDF_TOKEN_ESTIMATE = 2_000
+const usableWindow = (limit: SessionRunnerModel.Resolved["limit"]) =>
+  Math.min(limit.context > 0 ? limit.context : (limit.input ?? 0), limit.input ?? Number.POSITIVE_INFINITY)
+const compactionCeiling = (usable: number, buffer?: number) =>
+  buffer === undefined ? Math.floor(usable * AUTO_THRESHOLD) : usable - buffer
 const SUMMARY_TEMPLATE = `You MUST use this format for your response (you may omit sections that aren't applicable). Do not include the <template> tags in your response.
 <template>
 ## Objective
@@ -89,7 +94,7 @@ const LEGACY_HEADING = "## Additional Context"
 
 export type Settings = {
   auto: boolean
-  buffer: number
+  buffer?: number
   tokens: number
 }
 
@@ -172,6 +177,12 @@ const hasInputUsage = (message: SessionMessage.Info) =>
   message.tokens.input + message.tokens.cache.read + message.tokens.cache.write > 0
 
 export const estimateTokens = (input: RequiredInput) => {
+  const prompt = estimatePrompt(input)
+  return prompt.measured + prompt.estimated
+}
+
+/** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
+export const estimatePrompt = (input: RequiredInput) => {
   const index = input.messages.findLastIndex(hasInputUsage)
   const last = input.messages[index]
   // Keep the anchor's local tool results: they are not covered by its provider usage.
@@ -182,14 +193,15 @@ export const estimateTokens = (input: RequiredInput) => {
     .filter((message) => message.role !== "assistant" || message.id !== last?.id)
     .reduce((sum, message) => sum + message.content.reduce((sum, part) => sum + estimatePart(part), 0), 0)
   if (last?.type === "assistant" && last.tokens)
-    return (
-      added +
-      last.tokens.input +
-      last.tokens.cache.read +
-      last.tokens.cache.write +
-      last.tokens.output +
-      last.tokens.reasoning
-    )
+    return {
+      measured:
+        last.tokens.input +
+        last.tokens.cache.read +
+        last.tokens.cache.write +
+        last.tokens.output +
+        last.tokens.reasoning,
+      estimated: added,
+    }
   const transcript = SessionModelRequest.baseTranscript({
     agent: input.context.agent.info,
     model: input.resolved,
@@ -197,14 +209,16 @@ export const estimateTokens = (input: RequiredInput) => {
     initial: input.context.initial,
     messages: [],
   })
-  return (
-    added +
-    transcript.system.reduce((sum, part) => sum + Token.estimate(part.text), 0) +
-    input.context.tools.definitions.reduce(
-      (sum, tool) => sum + Token.estimate(tool.name + tool.description + JSON.stringify(tool.inputSchema)),
-      0,
-    )
-  )
+  return {
+    measured: 0,
+    estimated:
+      added +
+      transcript.system.reduce((sum, part) => sum + Token.estimate(part.text), 0) +
+      input.context.tools.definitions.reduce(
+        (sum, tool) => sum + Token.estimate(tool.name + tool.description + JSON.stringify(tool.inputSchema)),
+        0,
+      ),
+  }
 }
 
 const estimateMedia = (mime: string) => {
@@ -255,10 +269,10 @@ export const retainUsers = (
   return users.slice(start)
 }
 
-export const truncateToolOutput = (value: string) => {
-  if (value.length <= TOOL_OUTPUT_MAX_CHARS) return value
+export const truncateToolOutput = (value: string, maxChars = TOOL_OUTPUT_MAX_CHARS) => {
+  if (value.length <= maxChars) return value
   let end = 0
-  for (let count = 0; count < TOOL_OUTPUT_MAX_CHARS && end < value.length; count++) {
+  for (let count = 0; count < maxChars && end < value.length; count++) {
     const code = value.charCodeAt(end)
     end +=
       code >= 0xd800 && code <= 0xdbff && value.charCodeAt(end + 1) >= 0xdc00 && value.charCodeAt(end + 1) <= 0xdfff
@@ -317,6 +331,60 @@ const serializeRecentMessage = (message: SessionMessage.Info) => {
       ? ""
       : `[Shell]: ${message.command}\n${truncateToolOutput(message.output?.output ?? "")}`
   return ""
+}
+
+/** Flatten provider-bound history into text so a reduced summary request carries no tool pairs or reasoning signatures. */
+const serializeFallback = (messages: readonly Message[]) =>
+  messages.flatMap((message) => {
+    const parts = message.content.flatMap((part) => {
+      if (part.type === "text" || part.type === "reasoning") return part.text ? [part.text] : []
+      if (part.type === "media")
+        return [`[Attached ${part.media.mediaType}${part.filename ? `: ${part.filename}` : ""}; content omitted]`]
+      if (part.type === "tool-call") return [`[Tool call ${part.name}(${JSON.stringify(part.input)})]`]
+      if (part.type === "tool-result") {
+        const value =
+          part.result.type === "content"
+            ? part.result.value
+                .map((item) =>
+                  item.type === "text" ? item.text : `[Attached ${item.mime}${item.name ? `: ${item.name}` : ""}]`,
+                )
+                .join("\n")
+            : typeof part.result.value === "string"
+              ? part.result.value
+              : JSON.stringify(part.result.value)
+        return [`[Tool result ${part.name}]: ${truncateToolOutput(value ?? "", FALLBACK_TOOL_CHARS)}`]
+      }
+      if (part.type === "compaction" && part.text) return [part.text]
+      return []
+    })
+    return parts.length ? [{ role: message.role, text: `[${message.role}]: ${parts.join("\n")}` }] : []
+  })
+
+/** Retain a prior checkpoint and the newest complete exchanges that fit the summary input budget. */
+const fitFallback = (entries: ReturnType<typeof serializeFallback>, budget: number) => {
+  const previous = entries[0]?.text.includes("<conversation-checkpoint>") ? entries[0] : undefined
+  const rest = previous ? entries.slice(1) : entries
+  const groups = rest.reduce<Array<string>>((groups, entry) => {
+    if (entry.role === "user" || groups.length === 0) groups.push(entry.text)
+    else groups[groups.length - 1] += `\n\n${entry.text}`
+    return groups
+  }, [])
+  const header = previous ? `${previous.text}\n\n` : ""
+  const allowance = budget - Token.estimate(header)
+  if (allowance <= 0) return
+  let start = groups.length
+  let total = 0
+  while (start > 0) {
+    const size = Token.estimate(groups[start - 1])
+    if (total + size > allowance) break
+    total += size
+    start--
+  }
+  if (groups.length && start === groups.length) return
+  return {
+    text: `${header}${start ? `[${start} older exchanges omitted from this summary input]\n\n` : ""}${groups.slice(start).join("\n\n")}`,
+    omitted: start,
+  }
 }
 
 const splitHistory = (messages: readonly SessionMessage.Info[], keepTokens: number) => {
@@ -401,7 +469,7 @@ export const layer = Layer.effect(
 
     const state = State.create<Settings & { readonly native: NativeStrategy[] }, Editor>({
       name: "session-compaction",
-      initial: () => ({ auto: true, buffer: DEFAULT_BUFFER, tokens: DEFAULT_KEEP_TOKENS, native: [] }),
+      initial: () => ({ auto: true, tokens: DEFAULT_KEEP_TOKENS, native: [] }),
       editor: (editor) => ({
         configure: (settings) => {
           if (settings.auto !== undefined) editor.auto = settings.auto
@@ -470,6 +538,7 @@ export const layer = Layer.effect(
       input: ExecuteInput,
       messages: readonly SessionMessage.Info[],
       webSocket?: "session",
+      summaryPrompt?: string,
     ) => {
       const context = input.context
       const transcript = SessionModelRequest.baseTranscript({
@@ -479,6 +548,7 @@ export const layer = Layer.effect(
         initial: context.initial,
         messages,
       })
+      const prompt = estimatePrompt({ messages, resolved: context.model, context })
       return input.prepare({
         session: context.session,
         agent: context.agent.id,
@@ -490,6 +560,11 @@ export const layer = Layer.effect(
           ...(input.instructionUpdate ? [Message.system(input.instructionUpdate)] : []),
         ],
         webSocket,
+        // The instruction update and summary prompt are sent outside the history, so count them too.
+        inputTokens: {
+          measured: prompt.measured,
+          estimated: prompt.estimated + Token.estimate((input.instructionUpdate ?? "") + (summaryPrompt ?? "")),
+        },
       })
     }
     /** The durable transcript since the last local summary, re-expanding every native window. */
@@ -623,87 +698,163 @@ export const layer = Layer.effect(
       )
       // Checkpoints from the previous template ran far longer than this one asks for; its catch-all heading identifies them.
       const legacy = previous?.summary.includes(LEGACY_HEADING) ?? false
-      const prepared = yield* compactionRequest(input, history.messages)
+      const prompt = buildPrompt(previous !== undefined, legacy)
+      const prepared = yield* compactionRequest(input, history.messages, undefined, prompt)
       if (prepared.event.result) return yield* supplied(input, prepared.event.result, history.recent)
       // Hooks see the transcript alone; the summary prompt is appended after they run.
       const first = LLMRequest.update(prepared.request, {
-        messages: [...prepared.request.messages, Message.user(buildPrompt(previous !== undefined, legacy))],
+        messages: [...prepared.request.messages, Message.user(prompt)],
       })
+      const usable = usableWindow(context.model.limit)
+      const fixed =
+        prepared.request.system.reduce((sum, part) => sum + Token.estimate(part.text), 0) +
+        context.tools.definitions.reduce(
+          (sum, tool) => sum + Token.estimate(tool.name + tool.description + JSON.stringify(tool.inputSchema)),
+          0,
+        ) +
+        Token.estimate(prompt)
+      let entries: ReturnType<typeof serializeFallback> | undefined
+      let budget = usable ? compactionCeiling(usable, state.get().buffer) - fixed : undefined
+      let fallback =
+        usable > 0 &&
+        (budget ?? 0) > 0 &&
+        estimateTokens({ messages: history.messages, resolved: context.model, context }) +
+          Token.estimate(prompt) >
+          usable
+      let retries = 0
+      let last: string | undefined
+      let omitted = 0
       // Both requests share the retry allowance; rejected output never enters the reminder request.
       const transient = SessionRunnerRetry.transient(yield* SessionRunnerRetry.policy(context.session.id), {
         agent: context.agent.id,
         model: context.model.ref,
         hook: prepared.retry,
       })
-      for (const request of [
-        first,
-        LLMRequest.update(first, {
-          messages: [
-            ...first.messages,
-            Message.user(
-              "The previous response did not fill in the required summary template. Do not call tools. Return the summary as text using the exact section headings from the template.",
-            ),
-          ],
-        }),
-      ]) {
-        yield* Stream.suspend(() => {
-          chunks.length = 0
-          providerState = undefined
-          failure = undefined
-          return llm.stream(request, prepared.options)
-        }).pipe(
-          Stream.runForEach((event) => {
-            if (LLMEvent.is.providerError(event))
-              failure = {
-                type: event.classification === "context-overflow" ? "provider.invalid-request" : "provider.error",
-                message: event.message,
-              }
-            if (LLMEvent.is.textDelta(event)) {
-              chunks.push(event.text)
-              return bus.publish(SessionEvent.Compaction.Delta, {
-                sessionID: context.session.id,
-                text: event.text,
-              })
-            }
-            if (LLMEvent.is.stepFinish(event)) {
-              providerState =
-                event.providerMetadata?.[context.model.model.route.providerMetadataKey ?? context.model.model.provider]
-              const step = SessionUsage.record(event.usage, context.model.cost)
-              usage = usage ? SessionUsage.add(usage, step) : step
-            }
-            if (LLMEvent.is.finish(event)) {
-              if (event.reason.normalized === "length")
-                failure = { type: "compaction.failed", message: "Compaction summary reached the output token limit" }
-              if (event.reason.normalized === "content-filter")
-                failure = {
-                  type: "provider.content-filter",
-                  message: "Compaction summary was blocked by the provider",
-                }
-              if (event.reason.normalized === "unknown")
-                return Effect.fail(
-                  new AIError({
-                    reason: new InvalidProviderOutputError({
-                      message: "The provider response ended with an unknown finish reason.",
-                      classification: "incomplete-stream",
-                    }),
-                  }),
-                )
-              if (event.reason.normalized === "error")
-                return Effect.fail(
-                  new AIError({ reason: new UnknownProviderError({ message: "Compaction generation failed" }) }),
-                )
-            }
-            return Effect.void
+      let overflow = false
+      while (true) {
+        if (fallback) {
+          entries ??= serializeFallback(prepared.request.messages)
+          budget ??= Token.estimate(entries.map((entry) => entry.text).join("\n\n"))
+        }
+        const fitted = fallback && entries && budget !== undefined ? fitFallback(entries, budget) : undefined
+        if (fallback && (!fitted || fitted.text === last)) {
+          failure = {
+            type: "compaction.failed",
+            message: "The summary input cannot be reduced further without losing the latest exchange or checkpoint",
+          }
+          break
+        }
+        if (fitted) {
+          last = fitted.text
+          omitted = fitted.omitted
+          retries++
+        }
+        const selected = fitted
+          ? yield* input.prepare({
+              session: context.session,
+              agent: context.agent.id,
+              model: context.model,
+              tools: context.tools,
+              system: SessionModelRequest.baseTranscript({
+                agent: context.agent.info,
+                model: context.model,
+                tools: context.tools,
+                initial: context.initial,
+                messages: [],
+              }).system,
+              messages: [Message.user(fitted.text)],
+              inputTokens: { measured: 0, estimated: fixed + Token.estimate(fitted.text) },
+            })
+          : prepared
+        if (selected.event.result) {
+          yield* recordUsage
+          return yield* supplied(input, selected.event.result, history.recent)
+        }
+        const request = fallback
+          ? LLMRequest.update(selected.request, {
+              messages: [...selected.request.messages, Message.user(prompt)],
+            })
+          : first
+        for (const attempt of [
+          request,
+          LLMRequest.update(request, {
+            messages: [
+              ...request.messages,
+              Message.user(
+                "The previous response did not fill in the required summary template. Do not call tools. Return the summary as text using the exact section headings from the template.",
+              ),
+            ],
           }),
-          transient,
-          Effect.catchTag("AI.Error", (error) =>
-            Effect.sync(() => {
-              failure = toSessionError(error)
+        ]) {
+          yield* Stream.suspend(() => {
+            chunks.length = 0
+            providerState = undefined
+            failure = undefined
+            overflow = false
+            return llm.stream(attempt, selected.options)
+          }).pipe(
+            Stream.runForEach((event) => {
+              if (LLMEvent.is.providerError(event)) {
+                overflow = event.classification === "context-overflow"
+                failure = {
+                  type: overflow ? "provider.invalid-request" : "provider.error",
+                  message: event.message,
+                }
+              }
+              if (LLMEvent.is.textDelta(event)) {
+                chunks.push(event.text)
+                return bus.publish(SessionEvent.Compaction.Delta, {
+                  sessionID: context.session.id,
+                  text: event.text,
+                })
+              }
+              if (LLMEvent.is.stepFinish(event)) {
+                providerState =
+                  event.providerMetadata?.[
+                    context.model.model.route.providerMetadataKey ?? context.model.model.provider
+                  ]
+                const step = SessionUsage.record(event.usage, context.model.cost)
+                usage = usage ? SessionUsage.add(usage, step) : step
+              }
+              if (LLMEvent.is.finish(event)) {
+                if (event.reason.normalized === "length")
+                  failure = { type: "compaction.failed", message: "Compaction summary reached the output token limit" }
+                if (event.reason.normalized === "content-filter")
+                  failure = {
+                    type: "provider.content-filter",
+                    message: "Compaction summary was blocked by the provider",
+                  }
+                if (event.reason.normalized === "unknown")
+                  return Effect.fail(
+                    new AIError({
+                      reason: new InvalidProviderOutputError({
+                        message: "The provider response ended with an unknown finish reason.",
+                        classification: "incomplete-stream",
+                      }),
+                    }),
+                  )
+                if (event.reason.normalized === "error")
+                  return Effect.fail(
+                    new AIError({ reason: new UnknownProviderError({ message: "Compaction generation failed" }) }),
+                  )
+              }
+              return Effect.void
             }),
-          ),
-          Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(interrupted(input)))),
-        )
-        if (failure || hasSummarySection(chunks.join(""))) break
+            transient,
+            Effect.catchTag("AI.Error", (error) =>
+              Effect.sync(() => {
+                overflow = isContextOverflowFailure(error)
+                failure = toSessionError(error)
+              }),
+            ),
+            Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(interrupted(input)))),
+          )
+          if (failure || hasSummarySection(chunks.join(""))) break
+        }
+        if (!overflow) break
+        if (retries >= FALLBACK_OVERFLOW_RETRIES) break
+        fallback = true
+        if (retries && budget !== undefined) budget = Math.floor(budget / 2)
       }
       yield* recordUsage
       const summary = chunks.join("")
@@ -727,7 +878,9 @@ export const layer = Layer.effect(
         reason: input.reason,
         model: context.model.ref,
         providerState,
-        text: summary,
+        text: omitted
+          ? `${summary}\n\n[${omitted} older exchanges were omitted from the summary input; original session history is retained.]`
+          : summary,
         recent: history.recent,
         ...usage,
       })
@@ -754,12 +907,7 @@ export const layer = Layer.effect(
       const limit = input.resolved.limit
       const context = limit.context
       if (context <= 0) return false
-      const output = Math.min(limit.output, OUTPUT_TOKEN_MAX)
-      const promptCeiling = Math.min(
-        limit.input === undefined ? Number.POSITIVE_INFINITY : limit.input - config.buffer,
-        context - Math.max(output, config.buffer),
-      )
-      return estimateTokens(input) >= promptCeiling
+      return estimateTokens(input) >= compactionCeiling(usableWindow(limit), config.buffer)
     }
     const compactManual = Effect.fn("SessionCompaction.compactManual")(function* (input: ManualInput) {
       if (findTailStart(input.messages, state.get().tokens) === undefined)
