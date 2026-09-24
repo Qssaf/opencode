@@ -91,6 +91,7 @@ import { CommandPlugin } from "./command.js"
 import { NativeCompactionPlugin } from "./compaction.js"
 import { IdentityPlugin } from "./identity.js"
 import { PlanPlugin } from "./plan.js"
+import { ModelSwitchPlugin } from "./model-switch.js"
 import { ModelsDevPlugin } from "./models-dev.js"
 import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
 import { ProviderPlugins } from "./provider.js"
@@ -228,6 +229,8 @@ const pre = [
   ...ProviderPlugins,
   ...WebSearchPlugins,
   PatchTool.Plugin,
+  // Sees the editing tools the patch plugin left for this model.
+  ModelSwitchPlugin.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.
   ...OptimizePlugin.Plugins,
   IdentityPlugin.Plugin,
