@@ -248,10 +248,26 @@ export namespace Timeline {
                 : [],
             ),
           ]
+        const rowEntries =
+          detail?.thinking.placement === "grouped" &&
+          status.type === "busy" &&
+          turn.id === activeMessageID &&
+          turn.entries.length > 0 &&
+          turn.entries.every(
+            (entry) =>
+              entry.type === "assistant" &&
+              !entry.message.error &&
+              !entry.message.retry &&
+              entry.message.content.every(
+                (content) => content.type === "reasoning" || (content.type === "text" && !content.text.trim()),
+              ),
+          )
+            ? []
+            : turn.entries
         return constructMessageRows(
           turn.user,
           turn.id,
-          turn.entries,
+          rowEntries,
           index,
           showReasoning,
           status,
@@ -307,16 +323,6 @@ export namespace Timeline {
       !lastAssistant?.retry &&
       lastContent?.type === "reasoning" &&
       lastContent.time?.completed === undefined
-    const onlyThinking =
-      detail?.thinking.placement === "grouped" &&
-      isActive &&
-      status.type === "busy" &&
-      !!lastAssistant &&
-      !lastAssistant.error &&
-      !lastAssistant.retry &&
-      entries.every(
-        (entry) => entry.type === "assistant" && entry.message.content.every((content) => content.type === "reasoning"),
-      )
 
     if (previousUserMessage) rows.push(new TimelineRow.TurnGap({ userMessageID: turnID }))
     if (userMessage) rows.push(new TimelineRow.UserMessage({ userMessageID: turnID }))
@@ -330,9 +336,7 @@ export namespace Timeline {
         contentEntries(message)
           .filter(
             (entry) =>
-              isRenderable(entry.content, showReasoning, detail) &&
-              !(thinking && entry.content === lastContent) &&
-              !(onlyThinking && entry.content.type === "reasoning"),
+              isRenderable(entry.content, showReasoning, detail) && !(thinking && entry.content === lastContent),
           )
           .map((entry) => ({ messageID: message.id, messageIndex, partID: entry.id, content: entry.content })),
       )

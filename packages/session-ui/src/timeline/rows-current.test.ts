@@ -280,6 +280,7 @@ describe("current session timeline rows", () => {
 
     expect(rows([{ ...thought, time: { created: 1 } }], true).map((row) => row._tag)).toEqual(["UserMessage"])
     expect(rows([thought], true).map((row) => row._tag)).toEqual(["UserMessage"])
+    expect(rows([thought, { type: "text", text: "" }], true).map((row) => row._tag)).toEqual(["UserMessage"])
     expect(rows([thought, { type: "text", text: "Answer" }], true).map((row) => row._tag)).toEqual([
       "UserMessage",
       "AssistantPart",
@@ -289,6 +290,19 @@ describe("current session timeline rows", () => {
       rows([thought, storyTool("read", "read", "running", { filePath: "package.json" })], true).map((row) => row._tag),
     ).toEqual(["UserMessage", "AssistantPart"])
     expect(rows([thought], false).map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart"])
+
+    const failed = storyDocument([thought], true)
+    const messages = failed.messages.map((message) =>
+      message.type === "assistant" ? { ...message, error: { type: "provider.error", message: "Failed" } } : message,
+    )
+    expect(
+      createTimelineProjection({
+        sessionMessages: messages,
+        status: failed.status,
+        reasoningMode: "compact",
+        timelineDetail: timelinePresets[2].value,
+      }).rows.map((row) => row._tag),
+    ).toEqual(["UserMessage", "AssistantPart", "Error"])
   })
 
   test("stops thinking on idle, message completion, errors and retries", () => {

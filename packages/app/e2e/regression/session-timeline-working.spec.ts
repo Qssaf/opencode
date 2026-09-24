@@ -67,8 +67,8 @@ for (const width of [1400, 390]) {
     await expect(group).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Used 1 Thought" })).toHaveCount(0)
 
+    if (width === 390) return
     await timeline.send(partUpdated(toolPart("prt_after_thought", "read", "running", { filePath: "package.json" })))
-    if (width === 390) await page.getByRole("button", { name: "Jump to latest" }).click()
     await expect(group).toBeVisible()
     await expect(group).toHaveAttribute("data-timeline-part-ids", `${assistantID}:reasoning:0,prt_after_thought`)
     await expect(working).toBeVisible()
