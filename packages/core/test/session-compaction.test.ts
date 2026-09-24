@@ -153,7 +153,7 @@ test("compaction prompts prohibit task execution", () => {
     expect(SessionCompaction.buildPrompt(update)).toContain("Do not continue the task or call tools")
 })
 
-it.effect("auto compaction estimates current content against the buffered prompt ceiling", () =>
+it.effect("auto compaction uses 85% by default and a configured buffer instead", () =>
   Effect.gen(function* () {
     const compaction = yield* SessionCompaction.Service
     const session = Session.Info.make({
@@ -205,23 +205,27 @@ it.effect("auto compaction estimates current content against the buffered prompt
     }
 
     const inputLimited = { context: 400_000, input: 272_000, output: 128_000 }
-    expect(compaction.required(input(251_999, inputLimited))).toBe(false)
-    expect(compaction.required(input(252_000, inputLimited))).toBe(true)
+    expect(compaction.required(input(231_199, inputLimited))).toBe(false)
+    expect(compaction.required(input(231_200, inputLimited))).toBe(true)
     const native = (tokens: number, limit: { context: number; input?: number; output: number } = inputLimited) => {
       const selected = input(tokens, limit)
       return { ...selected, resolved: { ...selected.resolved, compaction: { type: "native" as const } } }
     }
-    expect(compaction.required(native(251_999))).toBe(false)
-    expect(compaction.required(native(252_000))).toBe(true)
+    expect(compaction.required(native(231_199))).toBe(false)
+    expect(compaction.required(native(231_200))).toBe(true)
     expect(compaction.required(native(1_000_000, { context: 0, input: undefined, output: 0 }))).toBe(false)
 
     const contextLimited = { context: 100_000, output: 10_000 }
-    expect(compaction.required(input(79_999, contextLimited))).toBe(false)
-    expect(compaction.required(input(80_000, contextLimited))).toBe(true)
+    expect(compaction.required(input(84_999, contextLimited))).toBe(false)
+    expect(compaction.required(input(85_000, contextLimited))).toBe(true)
 
     const outputLimited = { context: 100_000, output: 30_000 }
-    expect(compaction.required(input(69_999, outputLimited))).toBe(false)
-    expect(compaction.required(input(70_000, outputLimited))).toBe(true)
+    expect(compaction.required(input(84_999, outputLimited))).toBe(false)
+    expect(compaction.required(input(85_000, outputLimited))).toBe(true)
+
+    const smallWindow = { context: 32_000, output: 32_000 }
+    expect(compaction.required(input(27_199, smallWindow))).toBe(false)
+    expect(compaction.required(input(27_200, smallWindow))).toBe(true)
 
     const assistant = input(79_000, contextLimited).messages[0]
     const tool = SessionMessage.AssistantTool.make({
@@ -233,7 +237,9 @@ it.effect("auto compaction estimates current content against the buffered prompt
     })
     const grown = { ...input(79_000, contextLimited), messages: [{ ...assistant, content: [tool] }] }
     expect(SessionCompaction.estimateTokens(grown)).toBe(80_000)
-    expect(compaction.required(grown)).toBe(true)
+    expect(compaction.required(grown)).toBe(false)
+    const near = input(84_000, contextLimited)
+    expect(compaction.required({ ...near, messages: [{ ...near.messages[0], content: [tool] }] })).toBe(true)
 
     const interrupted = { ...assistant, id: SessionMessage.ID.create(), tokens: undefined }
     expect(SessionCompaction.estimateTokens({ ...grown, messages: [...grown.messages, interrupted] })).toBe(80_001)
@@ -285,6 +291,13 @@ it.effect("auto compaction estimates current content against the buffered prompt
       time: { created: 0, completed: 0 },
     })
     expect(compaction.required({ ...grown, messages: [checkpoint] })).toBe(false)
+
+    yield* compaction.transform((editor) => editor.configure({ buffer: 10_000 }))
+    expect(compaction.required(input(89_999, contextLimited))).toBe(false)
+    expect(compaction.required(input(90_000, contextLimited))).toBe(true)
+    yield* compaction.transform((editor) => editor.configure({ buffer: 0 }))
+    expect(compaction.required(input(99_999, contextLimited))).toBe(false)
+    expect(compaction.required(input(100_000, contextLimited))).toBe(true)
   }),
 )
 

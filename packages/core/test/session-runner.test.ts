@@ -2883,7 +2883,7 @@ describe("SessionRunnerLLM", () => {
         agent.steps = 2
       }),
     )
-    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "before-native", 10_000))
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "before-native", 36_000))
     yield* s.runPrompt("First real request")
     const checkpoint = (encrypted: string) =>
       CompactionCheckpointResponse.make({
@@ -2903,7 +2903,7 @@ describe("SessionRunnerLLM", () => {
     const installed = (yield* s.messages).filter((message) => message.type === "compaction")
     expect(installed).toMatchObject([{ status: "completed", reason: "auto", providerContext: { version: 1 } }])
     // New input without a post-checkpoint usage anchor must not retrigger compaction.
-    yield* s.llm.push(TestLLM.textWithUsage("Measured", "measured", 10_000))
+    yield* s.llm.push(TestLLM.textWithUsage("Measured", "measured", 36_000))
     yield* s.runPrompt("Third real request")
     expect(s.requests).toHaveLength(5)
     yield* s.llm.push(checkpoint("second"), TestLLM.textWithUsage("Continued", "continued", 10_000))
@@ -2929,7 +2929,7 @@ describe("SessionRunnerLLM", () => {
     s.currentModel = LanguageModel.make({ id: "native", provider: "openai", route: OpenAIResponses.route })
     modelLimits.set("native", { context: 42_000, output: 32_000 })
     s.compaction = { type: "native" }
-    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "before-native", 10_000))
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "before-native", 36_000))
     yield* s.runPrompt("Original durable request")
     yield* s.llm.push(
       CompactionCheckpointResponse.make({

@@ -37,9 +37,8 @@ import { toLLMMessages } from "./runner/to-llm-message.js"
 import type { AgentNotFoundError } from "./error.js"
 import type { Instructions } from "../instructions/index.js"
 
-const DEFAULT_BUFFER = 20_000
+const AUTO_THRESHOLD = 0.85
 const DEFAULT_KEEP_TOKENS = 15_000
-const OUTPUT_TOKEN_MAX = 32_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
 const IMAGE_TOKEN_ESTIMATE = 1_500
 const PDF_TOKEN_ESTIMATE = 2_000
@@ -89,7 +88,7 @@ const LEGACY_HEADING = "## Additional Context"
 
 export type Settings = {
   auto: boolean
-  buffer: number
+  buffer?: number
   tokens: number
 }
 
@@ -401,7 +400,7 @@ export const layer = Layer.effect(
 
     const state = State.create<Settings & { readonly native: NativeStrategy[] }, Editor>({
       name: "session-compaction",
-      initial: () => ({ auto: true, buffer: DEFAULT_BUFFER, tokens: DEFAULT_KEEP_TOKENS, native: [] }),
+      initial: () => ({ auto: true, tokens: DEFAULT_KEEP_TOKENS, native: [] }),
       editor: (editor) => ({
         configure: (settings) => {
           if (settings.auto !== undefined) editor.auto = settings.auto
@@ -754,11 +753,9 @@ export const layer = Layer.effect(
       const limit = input.resolved.limit
       const context = limit.context
       if (context <= 0) return false
-      const output = Math.min(limit.output, OUTPUT_TOKEN_MAX)
-      const promptCeiling = Math.min(
-        limit.input === undefined ? Number.POSITIVE_INFINITY : limit.input - config.buffer,
-        context - Math.max(output, config.buffer),
-      )
+      const usable = Math.min(context, limit.input ?? context)
+      const promptCeiling =
+        config.buffer === undefined ? Math.floor(usable * AUTO_THRESHOLD) : usable - config.buffer
       return estimateTokens(input) >= promptCeiling
     }
     const compactManual = Effect.fn("SessionCompaction.compactManual")(function* (input: ManualInput) {
