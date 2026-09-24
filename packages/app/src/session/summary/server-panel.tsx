@@ -230,8 +230,10 @@ function McpMenu(props: ServiceMenuProps) {
             }
             const change = (value: boolean) => {
               if (pending()) return
-              if (props.mcp) return props.mcp.change(server().name, value)
-              toggle.mutate({ name: server().name, enabled: value })
+              // A server that requires sign-in only starts sign-in; it never switches off.
+              const enabled = value || (!preview() && server().status.status === "needs_auth")
+              if (props.mcp) return props.mcp.change(server().name, enabled)
+              toggle.mutate({ name: server().name, enabled })
             }
             return (
               <Switch
