@@ -208,6 +208,12 @@ const estimateFixed = (system: ReadonlyArray<{ readonly text: string }>, tools: 
   )
 
 export const estimateTokens = (input: RequiredInput) => {
+  const prompt = estimatePrompt(input)
+  return prompt.measured + prompt.estimated
+}
+
+/** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
+export const estimatePrompt = (input: RequiredInput) => {
   const index = input.messages.findLastIndex(hasInputUsage)
   const last = input.messages[index]
   // Keep the anchor's local tool results: they are not covered by its provider usage.
@@ -218,7 +224,7 @@ export const estimateTokens = (input: RequiredInput) => {
     .filter((message) => message.role !== "assistant" || message.id !== last?.id)
     .reduce((sum, message) => sum + message.content.reduce((sum, part) => sum + estimatePart(part), 0), 0)
   if (last?.type === "assistant" && last.tokens)
-    return added + inputTokens(last.tokens) + last.tokens.output + last.tokens.reasoning
+    return { measured: inputTokens(last.tokens) + last.tokens.output + last.tokens.reasoning, estimated: added }
   const transcript = SessionModelRequest.baseTranscript({
     agent: input.context.agent.info,
     model: input.resolved,
@@ -226,7 +232,7 @@ export const estimateTokens = (input: RequiredInput) => {
     initial: input.context.initial,
     messages: [],
   })
-  return added + estimateFixed(transcript.system, input.context.tools)
+  return { measured: 0, estimated: added + estimateFixed(transcript.system, input.context.tools) }
 }
 
 const estimateMedia = (mime: string) => {
@@ -541,6 +547,7 @@ export const layer = Layer.effect(
     const prepare = (
       input: ExecuteInput,
       transcript: Pick<SessionModelRequest.Input, "system" | "messages">,
+      inputTokens: SessionModelRequest.Input["inputTokens"],
       webSocket?: "session",
     ) =>
       input.prepare({
@@ -551,6 +558,7 @@ export const layer = Layer.effect(
         system: transcript.system,
         messages: transcript.messages,
         webSocket,
+        inputTokens,
       })
     const transcript = (input: ExecuteInput, messages: readonly SessionMessage.Info[]) =>
       SessionModelRequest.baseTranscript({
@@ -564,13 +572,20 @@ export const layer = Layer.effect(
       input: ExecuteInput,
       messages: readonly SessionMessage.Info[],
       webSocket?: "session",
+      summaryPrompt?: string,
     ) => {
       const base = transcript(input, messages)
+      const prompt = estimatePrompt({ messages, resolved: input.context.model, context: input.context })
       return prepare(
         input,
         {
           system: base.system,
           messages: [...base.messages, ...(input.instructionUpdate ? [Message.system(input.instructionUpdate)] : [])],
+        },
+        // The instruction update and summary prompt are sent outside the history, so count them too.
+        {
+          measured: prompt.measured,
+          estimated: prompt.estimated + Token.estimate((input.instructionUpdate ?? "") + (summaryPrompt ?? "")),
         },
         webSocket,
       )
@@ -735,7 +750,7 @@ export const layer = Layer.effect(
       const previous = lastCheckpoint(history.messages)
       // Checkpoints from the previous template ran far longer than this one asks for; its catch-all heading identifies them.
       const prompt = buildPrompt(previous !== undefined, previous?.summary.includes(LEGACY_HEADING) ?? false)
-      const prepared = yield* compactionRequest(input, history.messages)
+      const prepared = yield* compactionRequest(input, history.messages, undefined, prompt)
       if (prepared.event.result) return yield* supplied(input, prepared.event.result, history.recent)
       // Both requests share the retry allowance; rejected output never enters the reminder request.
       const transient = yield* retry(input, prepared.retry)
@@ -798,7 +813,11 @@ export const layer = Layer.effect(
             },
             yield* Ref.get(usage),
           )
-        const reduced = yield* prepare(input, { system, messages: [Message.user(fitted.text)] })
+        const reduced = yield* prepare(
+          input,
+          { system, messages: [Message.user(fitted.text)] },
+          { measured: 0, estimated: fixed + fitted.tokens },
+        )
         if (reduced.event.result)
           return yield* supplied(input, reduced.event.result, history.recent, yield* Ref.get(usage))
         const result = yield* generate(reduced.request, reduced.options)
