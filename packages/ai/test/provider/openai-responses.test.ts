@@ -153,6 +153,22 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("keeps GPT-6 reasoning with function tools on the Responses API", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model: OpenAI.configure({ apiKey: "test" }).responses("gpt-6-sol"),
+          prompt: "Look up the weather.",
+          tools: [ToolDefinition.make({ name: "weather", description: "Find weather", inputSchema: {} })],
+          providerOptions: { reasoningEffort: "high" },
+        }),
+      )
+
+      expect(prepared.body.tools).toHaveLength(1)
+      expect(prepared.body.reasoning).toMatchObject({ effort: "high" })
+    }),
+  )
+
   it.effect("lowers the hosted OpenAI image generation tool", () =>
     Effect.gen(function* () {
       const prepared = yield* compileRequest(

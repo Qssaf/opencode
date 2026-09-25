@@ -766,8 +766,12 @@ const detectZaiToolStream = (provider: string, baseURL: string | undefined, mode
   return true
 }
 
-const lowerOptions = (request: LLMRequest, supportsStore: boolean) => {
-  const options = OpenAIOptions.resolve(request)
+const lowerOptions = (
+  request: LLMRequest,
+  options: ReturnType<typeof OpenAIOptions.resolve>,
+  supportsStore: boolean,
+  requiresNoneEffort: boolean,
+) => {
   // Default off: strict providers 400 on unknown body fields, so only send
   // the key where compatibility explicitly allows it. Header-based affinity
   // (x-session-affinity, x-grok-conv-id, ...) is unaffected.
@@ -780,7 +784,11 @@ const lowerOptions = (request: LLMRequest, supportsStore: boolean) => {
     // native OpenAI Chat default. Non-standard providers omit `store` entirely.
     ...(supportsStore && options.store === undefined ? { store: false } : {}),
     ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
-    ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
+    ...(requiresNoneEffort
+      ? { reasoning_effort: "none" }
+      : options.reasoningEffort
+        ? { reasoning_effort: options.reasoningEffort }
+        : {}),
   }
 }
 
@@ -810,6 +818,17 @@ export const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (
     request.model.compatibility?.zaiToolStream ?? detectZaiToolStream(provider, baseURL, request.model.id)
   const hasHistory = hasToolHistory(request.messages)
   const hasActiveTools = flattened.tools.length > 0
+  // GPT-6 Sol/Luna only support Chat function calling without reasoning.
+  // Responses supports tools at every effort, so this applies to native OpenAI Chat only.
+  const requiresNoneEffort =
+    provider === "openai" &&
+    (request.model.id === "gpt-6-sol" || request.model.id === "gpt-6-luna") &&
+    (hasActiveTools || hasHistory)
+  const nativeOptions = OpenAIOptions.resolve(request)
+  if (requiresNoneEffort && nativeOptions.reasoningEffort !== undefined && nativeOptions.reasoningEffort !== "none")
+    return yield* ProviderShared.invalidRequest(
+      `${request.model.id} Chat function calling requires reasoningEffort "none"; use the Responses API for reasoning with tools`,
+    )
   return {
     model: request.model.id,
     messages: yield* lowerMessages(flattened.request, options),
@@ -832,7 +851,7 @@ export const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (
     presence_penalty: generation?.presencePenalty,
     seed: generation?.seed,
     stop: generation?.stop,
-    ...lowerOptions(request, supportsStore),
+    ...lowerOptions(request, nativeOptions, supportsStore, requiresNoneEffort),
   }
 })
 

@@ -249,6 +249,88 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  for (const id of ["gpt-6-sol", "gpt-6-luna"]) {
+    it.effect(`enables function calling for ${id} on OpenAI Chat`, () =>
+      Effect.gen(function* () {
+        const prepared = yield* compileRequest(
+          LLM.request({
+            model: OpenAI.configure({ apiKey: "test" }).chat(id),
+            prompt: "Look up the weather.",
+            tools: [ToolDefinition.make({ name: "weather", description: "Find weather", inputSchema: {} })],
+          }),
+        )
+
+        expect(prepared.body.tools).toHaveLength(1)
+        expect(prepared.body.reasoning_effort).toBe("none")
+      }),
+    )
+  }
+
+  it.effect("rejects GPT-6 Chat tools with explicit reasoning instead of silently downgrading it", () =>
+    Effect.gen(function* () {
+      const error = yield* compileRequest(
+        LLM.request({
+          model: OpenAI.configure({ apiKey: "test", providerOptions: { reasoningEffort: "high" } }).chat("gpt-6-sol"),
+          prompt: "Look up the weather.",
+          tools: [ToolDefinition.make({ name: "weather", description: "Find weather", inputSchema: {} })],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.message).toContain('requires reasoningEffort "none"')
+      expect(error.message).toContain("Responses API")
+    }),
+  )
+
+  it.effect("keeps GPT-6 Chat reasoning when no function calling is involved", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model: OpenAI.configure({ apiKey: "test" }).chat("gpt-6-luna"),
+          prompt: "Think carefully.",
+          providerOptions: { reasoningEffort: "high" },
+        }),
+      )
+
+      expect(prepared.body.reasoning_effort).toBe("high")
+    }),
+  )
+
+  it.effect("does not impose OpenAI's GPT-6 Chat restriction on compatible providers", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model: OpenAICompatible.configure({ baseURL: "https://api.compatible.test/v1", apiKey: "test" }).model(
+            "gpt-6-sol",
+          ),
+          prompt: "Look up the weather.",
+          tools: [ToolDefinition.make({ name: "weather", description: "Find weather", inputSchema: {} })],
+          providerOptions: { reasoningEffort: "high" },
+        }),
+      )
+
+      expect(prepared.body.tools).toHaveLength(1)
+      expect(prepared.body.reasoning_effort).toBe("high")
+    }),
+  )
+
+  it.effect("keeps GPT-6 Chat tool history valid without active tools", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model: OpenAI.configure({ apiKey: "test" }).chat("gpt-6-sol"),
+          messages: [
+            Message.user("Look up the weather."),
+            Message.assistant([ToolCallPart.make({ id: "call_1", name: "weather", input: {} })]),
+            Message.tool({ id: "call_1", name: "weather", result: { forecast: "sunny" } }),
+          ],
+        }),
+      )
+
+      expect(prepared.body.tools).toEqual([])
+      expect(prepared.body.reasoning_effort).toBe("none")
+    }),
+  )
+
   it.effect("keeps valid Chat options when a sibling option is malformed", () =>
     Effect.gen(function* () {
       const prepared = yield* compileRequest(
