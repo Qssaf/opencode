@@ -263,19 +263,37 @@ export namespace Timeline {
         )
       }),
     ]
+    const groupedRows = detail
+      ? groupMessages(
+          rows,
+          detail,
+          new Set(
+            messages
+              .filter((message) => message.type === "compaction" || message.type === "model-switched")
+              .map((message) => message.id),
+          ),
+        )
+      : rows
+    if (status.type !== "busy" || detail?.thinking.placement !== "grouped")
+      return { activeMessageID, rows: groupedRows }
+    const activity = groupedRows.filter(
+      (row) => row.userMessageID === activeMessageID && row._tag !== "TurnGap" && row._tag !== "UserMessage",
+    )
     return {
       activeMessageID,
-      rows: detail
-        ? groupMessages(
-            rows,
-            detail,
-            new Set(
-              messages
-                .filter((message) => message.type === "compaction" || message.type === "model-switched")
-                .map((message) => message.id),
-            ),
+      rows: groupedRows.filter((row) => {
+        if (activity.length !== 1 || row !== activity[0]) return true
+        if (row._tag !== "AssistantPart" || row.group.type !== "context") return true
+        return row.group.refs.some((ref) => {
+          const message = messages.find((item) => item.id === ref.messageID)
+          return (
+            message?.type !== "assistant" ||
+            !!message.error ||
+            !!message.retry ||
+            resolveContent(message, ref.partID)?.type !== "reasoning"
           )
-        : rows,
+        })
+      }),
     }
   }
 
@@ -384,24 +402,7 @@ export namespace Timeline {
       )
     }
 
-    if (!isActive || status.type !== "busy" || detail?.thinking.placement !== "grouped") return rows
-    // Interrupted errors may not create an Error row when notices are hidden.
-    if (assistantMessages.some((message) => message.error || message.retry)) return rows
-    const activity = rows.filter((row) => row._tag !== "TurnGap" && row._tag !== "UserMessage")
-    if (activity.length !== 1) return rows
-    const row = activity[0]
-    if (row?._tag !== "AssistantPart" || row.group.type !== "context") return rows
-    if (
-      row.group.refs.some(
-        (ref) =>
-          resolveContent(
-            assistantMessages.find((message) => message.id === ref.messageID),
-            ref.partID,
-          )?.type !== "reasoning",
-      )
-    )
-      return rows
-    return rows.filter((item) => item !== row)
+    return rows
   }
 
   export function resolveContent(message: SessionMessageInfo | undefined, partID: string): Content | undefined {
