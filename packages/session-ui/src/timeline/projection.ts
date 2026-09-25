@@ -274,16 +274,19 @@ export namespace Timeline {
           ),
         )
       : rows
-    if (status.type !== "busy" || detail?.thinking.placement !== "grouped")
-      return { activeMessageID, rows: groupedRows }
-    const activity = groupedRows.filter(
-      (row) => row.userMessageID === activeMessageID && row._tag !== "TurnGap" && row._tag !== "UserMessage",
-    )
     return {
       activeMessageID,
-      rows: groupedRows.filter((row) => {
-        if (activity.length !== 1 || row !== activity[0]) return true
+      rows: groupedRows.filter((row, index) => {
+        if (status.type !== "busy" || row.userMessageID !== activeMessageID) return true
         if (row._tag !== "AssistantPart" || row.group.type !== "context") return true
+        const previous = groupedRows[index - 1]
+        if (
+          previous?.userMessageID === activeMessageID &&
+          previous._tag !== "TurnGap" &&
+          previous._tag !== "UserMessage"
+        )
+          return true
+        if (groupedRows[index + 1]?.userMessageID === activeMessageID) return true
         return row.group.refs.some((ref) => {
           const message = messages.find((item) => item.id === ref.messageID)
           return (
