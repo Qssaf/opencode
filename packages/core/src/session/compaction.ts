@@ -872,7 +872,7 @@ export const layer = Layer.effect(
       const recover = (cause: AIError): Effect.Effect<Outcome> => {
         if (input.reason !== "auto" || !isContextOverflowFailure(cause))
           return failed(envelope(input), toSessionError(cause))
-        return recoverLocally({ ...input, started: true }).pipe(
+        return summarizeOriginal({ ...input, started: true }).pipe(
           Effect.map((result) => (result.status === "completed" ? { ...result, recoveredOverflow: true } : result)),
         )
       }
@@ -887,7 +887,8 @@ export const layer = Layer.effect(
     /** The durable transcript since the last local summary, re-expanding every native window. */
     const original = (sessionID: SessionSchema.ID) => SessionHistory.load(db, sessionID, "local").pipe(Effect.orDie)
 
-    const recoverLocally = (input: ExecuteInput) =>
+    /** Summarize from the original transcript, whatever the model's compaction setting: an overflowing window cannot be resubmitted. */
+    const summarizeOriginal = (input: ExecuteInput) =>
       original(input.context.session.id).pipe(
         Effect.flatMap((messages) => summarize({ ...input, context: { ...input.context, messages } })),
       )
@@ -899,7 +900,7 @@ export const layer = Layer.effect(
 
     const compact = Effect.fn("SessionCompaction.compact")(function* (input: AutoInput): Effect.fn.Return<Outcome> {
       const request = { ...input, reason: "auto" as const }
-      return yield* input.overflow ? recoverLocally(request) : run(request)
+      return yield* input.overflow ? summarizeOriginal(request) : run(request)
     })
 
     const required = (input: RequiredInput) => {
