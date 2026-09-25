@@ -174,7 +174,7 @@ export interface Interface extends State.Transformable<Editor> {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionCompaction") {}
 
-const inputTokens = (tokens: SessionMessage.Assistant["tokens"] & {}) =>
+const inputTokens = (tokens: NonNullable<SessionMessage.Assistant["tokens"]>) =>
   tokens.input + tokens.cache.read + tokens.cache.write
 
 const hasInputUsage = (message: SessionMessage.Info) =>
