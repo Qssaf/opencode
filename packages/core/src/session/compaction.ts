@@ -651,11 +651,17 @@ export const layer = Layer.effect(
       })
     })
 
+    /** Every stored message since the last local summary, with native windows expanded back to what they replaced. */
+    const durableHistory = (sessionID: SessionSchema.ID) =>
+      SessionHistory.load(db, sessionID, "local").pipe(Effect.orDie)
+
     // Local summary
 
     const summarize = Effect.fn("SessionCompaction.summarize")(function* (input: ExecuteInput) {
       const context = input.context
-      const history = splitHistory(context.messages, state.get().tokens)
+      // A known overflow cannot resubmit the loaded window; start again from durable history.
+      const messages = input.overflow ? yield* durableHistory(context.session.id) : context.messages
+      const history = splitHistory(messages, state.get().tokens)
       if (!history) {
         return yield* failed(envelope(input), { type: "compaction.unavailable", message: "Nothing to compact yet" })
       }
@@ -843,7 +849,7 @@ export const layer = Layer.effect(
         )
       }
 
-      const retained = original(context.session.id).pipe(
+      const retained = durableHistory(context.session.id).pipe(
         Effect.map((messages) => retainUsers(messages, context.model, state.get().tokens)),
       )
       const strategy = state
@@ -872,7 +878,7 @@ export const layer = Layer.effect(
       const recover = (cause: AIError): Effect.Effect<Outcome> => {
         if (input.reason !== "auto" || !isContextOverflowFailure(cause))
           return failed(envelope(input), toSessionError(cause))
-        return summarizeOriginal({ ...input, started: true }).pipe(
+        return summarize({ ...input, overflow: true, started: true }).pipe(
           Effect.map((result) => (result.status === "completed" ? { ...result, recoveredOverflow: true } : result)),
         )
       }
@@ -884,15 +890,6 @@ export const layer = Layer.effect(
       )
     })
 
-    /** The durable transcript since the last local summary, re-expanding every native window. */
-    const original = (sessionID: SessionSchema.ID) => SessionHistory.load(db, sessionID, "local").pipe(Effect.orDie)
-
-    /** Summarize from the original transcript, whatever the model's compaction setting: an overflowing window cannot be resubmitted. */
-    const summarizeOriginal = (input: ExecuteInput) =>
-      original(input.context.session.id).pipe(
-        Effect.flatMap((messages) => summarize({ ...input, context: { ...input.context, messages } })),
-      )
-
     // Entry points
 
     const run = (input: ExecuteInput) =>
@@ -900,7 +897,8 @@ export const layer = Layer.effect(
 
     const compact = Effect.fn("SessionCompaction.compact")(function* (input: AutoInput): Effect.fn.Return<Outcome> {
       const request = { ...input, reason: "auto" as const }
-      return yield* input.overflow ? summarizeOriginal(request) : run(request)
+      // A known overflow skips the native mechanism: the loaded window is what overflowed.
+      return yield* input.overflow ? summarize(request) : run(request)
     })
 
     const required = (input: RequiredInput) => {
