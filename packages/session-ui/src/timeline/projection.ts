@@ -248,26 +248,10 @@ export namespace Timeline {
                 : [],
             ),
           ]
-        const rowEntries =
-          detail?.thinking.placement === "grouped" &&
-          status.type === "busy" &&
-          turn.id === activeMessageID &&
-          turn.entries.length > 0 &&
-          turn.entries.every(
-            (entry) =>
-              entry.type === "assistant" &&
-              !entry.message.error &&
-              !entry.message.retry &&
-              entry.message.content.every(
-                (content) => content.type === "reasoning" || (content.type === "text" && !content.text.trim()),
-              ),
-          )
-            ? []
-            : turn.entries
         return constructMessageRows(
           turn.user,
           turn.id,
-          rowEntries,
+          turn.entries,
           index,
           showReasoning,
           status,
@@ -400,7 +384,24 @@ export namespace Timeline {
       )
     }
 
-    return rows
+    if (!isActive || status.type !== "busy" || detail?.thinking.placement !== "grouped") return rows
+    // Interrupted errors may not create an Error row when notices are hidden.
+    if (assistantMessages.some((message) => message.error || message.retry)) return rows
+    const activity = rows.filter((row) => row._tag !== "TurnGap" && row._tag !== "UserMessage")
+    if (activity.length !== 1) return rows
+    const row = activity[0]
+    if (row?._tag !== "AssistantPart" || row.group.type !== "context") return rows
+    if (
+      row.group.refs.some(
+        (ref) =>
+          resolveContent(
+            assistantMessages.find((message) => message.id === ref.messageID),
+            ref.partID,
+          )?.type !== "reasoning",
+      )
+    )
+      return rows
+    return rows.filter((item) => item !== row)
   }
 
   export function resolveContent(message: SessionMessageInfo | undefined, partID: string): Content | undefined {

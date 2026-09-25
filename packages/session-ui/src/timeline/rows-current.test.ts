@@ -303,6 +303,17 @@ describe("current session timeline rows", () => {
         timelineDetail: timelinePresets[2].value,
       }).rows.map((row) => row._tag),
     ).toEqual(["UserMessage", "AssistantPart", "Error"])
+
+    expect(
+      createTimelineProjection({
+        sessionMessages: failed.messages.map((message) =>
+          message.type === "assistant" ? { ...message, error: { type: "Interrupted", message: "Stopped" } } : message,
+        ),
+        status: failed.status,
+        reasoningMode: "compact",
+        timelineDetail: { ...timelinePresets[2].value, notices: { placement: "hidden" } },
+      }).rows.map((row) => row._tag),
+    ).toEqual(["UserMessage", "AssistantPart"])
   })
 
   test("stops thinking on idle, message completion, errors and retries", () => {
