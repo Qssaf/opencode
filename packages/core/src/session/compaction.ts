@@ -350,24 +350,21 @@ const serializeFallback = (messages: readonly Message[]) =>
     return parts.length ? [{ role: message.role, text: `[${message.role}]: ${parts.join("\n")}` }] : []
   })
 
-/** Retain a prior checkpoint and the newest complete exchanges that fit the summary input budget. */
-const fitFallback = (entries: ReturnType<typeof serializeFallback>, budget: number) => {
+/** Retain a prior checkpoint and the newest complete exchanges that fit the summary input budget, or all of them. */
+const fitFallback = (entries: ReturnType<typeof serializeFallback>, budget = Number.POSITIVE_INFINITY) => {
   const previous = entries[0]?.text.includes("<conversation-checkpoint>") ? entries[0] : undefined
   const rest = previous ? entries.slice(1) : entries
   const groups = rest.reduce<Array<string>>((groups, entry) => {
-    if (entry.role === "user" || groups.length === 0) groups.push(entry.text)
-    else groups[groups.length - 1] += `\n\n${entry.text}`
-    return groups
+    if (entry.role === "user" || groups.length === 0) return [...groups, entry.text]
+    return [...groups.slice(0, -1), `${groups[groups.length - 1]}\n\n${entry.text}`]
   }, [])
   const header = previous ? `${previous.text}\n\n` : ""
   const allowance = budget - Token.estimate(header)
   if (allowance <= 0) return
   const start = fitNewest(groups, Token.estimate, allowance)
   if (groups.length && start === groups.length) return
-  return {
-    text: `${header}${start ? `[${start} older exchanges omitted from this summary input]\n\n` : ""}${groups.slice(start).join("\n\n")}`,
-    omitted: start,
-  }
+  const text = `${header}${start ? `[${start} older exchanges omitted from this summary input]\n\n` : ""}${groups.slice(start).join("\n\n")}`
+  return { text, omitted: start, tokens: Token.estimate(text) }
 }
 
 const splitHistory = (messages: readonly SessionMessage.Info[], keepTokens: number) => {
@@ -516,17 +513,24 @@ export const layer = Layer.effect(
     const started = (input: ExecuteInput, recent: string) =>
       input.started ? Effect.void : bus.publish(SessionEvent.Compaction.Started, { ...envelope(input), recent })
     /** A hook answered the request itself. */
-    const supplied = (input: ExecuteInput, result: SessionCompactionResult, recent: string) =>
-      ended(input, {
+    const supplied = (
+      input: ExecuteInput,
+      result: SessionCompactionResult,
+      recent: string,
+      prior?: SessionUsage.Recorded,
+    ) => {
+      const own = result.tokens && {
+        tokens: result.tokens,
+        cost: SessionUsage.calculateCost(input.context.model.cost, result.tokens),
+      }
+      return ended(input, {
         text: result.summary,
         recent,
         providerState: result.providerState,
-        usage: result.tokens && {
-          tokens: result.tokens,
-          cost: SessionUsage.calculateCost(input.context.model.cost, result.tokens),
-        },
+        usage: prior && own ? SessionUsage.add(prior, own) : (prior ?? own),
         metadata: result.metadata,
       })
+    }
     // Manual controls settle through the inbox; only automatic work needs a durable interruption record.
     const interrupted = (input: ExecuteInput, usage?: SessionUsage.Recorded) =>
       Effect.gen(function* () {
@@ -637,14 +641,16 @@ export const layer = Layer.effect(
         ),
       ).pipe(
         Effect.onInterrupt(() => interrupted(input)),
-        Effect.catchTag("AI.Error", (cause): Effect.Effect<Outcome> =>
-          input.reason === "auto" && isContextOverflowFailure(cause)
-            ? recoverLocally({ ...input, started: true }).pipe(
-                Effect.map((result) =>
-                  result.status === "completed" ? { ...result, recoveredOverflow: true } : result,
-                ),
-              )
-            : failed(envelope(input), toSessionError(cause)),
+        Effect.catchTag(
+          "AI.Error",
+          (cause): Effect.Effect<Outcome> =>
+            input.reason === "auto" && isContextOverflowFailure(cause)
+              ? recoverLocally({ ...input, started: true }).pipe(
+                  Effect.map((result) =>
+                    result.status === "completed" ? { ...result, recoveredOverflow: true } : result,
+                  ),
+                )
+              : failed(envelope(input), toSessionError(cause)),
         ),
       )
     })
@@ -779,7 +785,7 @@ export const layer = Layer.effect(
       // Flatten the history to text and drop the oldest exchanges until the provider accepts the request.
       const entries = serializeFallback(prepared.request.messages)
       const system = transcript(input, []).system
-      let budget = ceiling ?? Token.estimate(entries.map((entry) => entry.text).join("\n\n"))
+      let budget = ceiling
       let last: string | undefined
       for (let attempt = 1; ; attempt++) {
         const fitted = fitFallback(entries, budget)
@@ -793,13 +799,11 @@ export const layer = Layer.effect(
             yield* Ref.get(usage),
           )
         const reduced = yield* prepare(input, { system, messages: [Message.user(fitted.text)] })
-        if (reduced.event.result) {
-          yield* recordUsage(context.session.id, yield* Ref.get(usage))
-          return yield* supplied(input, reduced.event.result, history.recent)
-        }
+        if (reduced.event.result)
+          return yield* supplied(input, reduced.event.result, history.recent, yield* Ref.get(usage))
         const result = yield* generate(reduced.request, reduced.options)
         if (!result.overflow || attempt === FALLBACK_OVERFLOW_RETRIES) return yield* finish(result, fitted.omitted)
-        budget = Math.floor(budget / 2)
+        budget = Math.floor(fitted.tokens / 2)
         last = fitted.text
       }
     })
