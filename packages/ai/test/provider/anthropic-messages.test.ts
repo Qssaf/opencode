@@ -170,6 +170,41 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  it.effect("rejects unsupported thinking modes for Claude Opus 5.5 before sending", () =>
+    Effect.gen(function* () {
+      for (const thinking of [{ type: "disabled" as const }, { type: "enabled" as const, budgetTokens: 2_048 }]) {
+        const error = yield* compileRequest(
+          LLMRequest.update(request, {
+            model: AnthropicMessages.route.model({ id: "claude-opus-5-5" }),
+            providerOptions: { thinking },
+          }),
+        ).pipe(Effect.flip)
+
+        expect(error.reason._tag).toBe("InvalidRequest")
+        expect(error.message).toContain("Claude Opus 5.5")
+        expect(error.message).toContain("effort")
+      }
+    }),
+  )
+
+  it.effect("keeps adaptive thinking and effort on Claude Opus 5.5", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLMRequest.update(request, {
+          model: AnthropicMessages.route.model({ id: "claude-opus-5-5" }),
+          providerOptions: { thinking: { type: "adaptive", display: "summarized" }, effort: "low" },
+        }),
+      )
+
+      expect(prepared.body.thinking).toEqual({
+        type: "adaptive",
+        display: "summarized",
+        block_binding: { prefix_mismatch_behavior: "drop_block" },
+      })
+      expect(prepared.body.output_config).toEqual({ effort: "low" })
+    }),
+  )
+
   it.effect("fits the thinking budget to half the output limit", () =>
     Effect.gen(function* () {
       const thinking = (maxTokens: number) =>
@@ -727,6 +762,49 @@ describe("Anthropic Messages route", () => {
         },
       ])
       expect(prepared.body.tool_choice).toEqual({ type: "none" })
+    }),
+  )
+
+  it.effect("rejects forced tool use for Claude Opus 5.5 before sending", () =>
+    Effect.gen(function* () {
+      for (const toolChoice of ["required" as const, { type: "tool" as const, name: "lookup" }]) {
+        const error = yield* compileRequest(
+          LLM.request({
+            model: AnthropicMessages.route.model({ id: "anthropic.claude-opus-5-5@default" }),
+            prompt: "Look it up",
+            tools: [{ name: "lookup", description: "Look things up", inputSchema: { type: "object" } }],
+            toolChoice,
+          }),
+        ).pipe(Effect.flip)
+
+        expect(error.reason._tag).toBe("InvalidRequest")
+        expect(error.message).toContain("Claude Opus 5.5")
+        expect(error.message).toContain("auto")
+      }
+    }),
+  )
+
+  it.effect("preserves supported tool choices on Opus 5.5 and forced choices on Opus 5", () =>
+    Effect.gen(function* () {
+      const choices = yield* Effect.forEach(
+        [
+          { id: "claude-opus-5-5", toolChoice: "auto" as const },
+          { id: "claude-opus-5-5", toolChoice: "none" as const },
+          { id: "claude-opus-5", toolChoice: "required" as const },
+          { id: "claude-opus-5", toolChoice: { type: "tool" as const, name: "lookup" } },
+        ],
+        ({ id, toolChoice }) =>
+          compileRequest(
+            LLM.request({
+              model: AnthropicMessages.route.model({ id }),
+              prompt: "Look it up",
+              tools: [{ name: "lookup", description: "Look things up", inputSchema: { type: "object" } }],
+              toolChoice,
+            }),
+          ).pipe(Effect.map((prepared) => prepared.body.tool_choice)),
+      )
+
+      expect(choices).toEqual([{ type: "auto" }, { type: "none" }, { type: "any" }, { type: "tool", name: "lookup" }])
     }),
   )
 

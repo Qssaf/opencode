@@ -997,6 +997,11 @@ const claudeVersion = (id: string) => {
   return { family: match.family, major: Number(match.major), minor: Number(match.minor ?? 0) }
 }
 
+const isClaudeOpus55 = (model: LLMRequest["model"]) => {
+  const version = claudeVersion(model.id)
+  return version?.family === "opus" && version.major === 5 && version.minor === 5
+}
+
 const supportsThinkingBlockBinding = (model: LLMRequest["model"]) => {
   const override = model.compatibility?.supportsThinkingBlockBinding
   if (override !== undefined) return override
@@ -1037,6 +1042,13 @@ const fitThinking = (thinking: AnthropicThinking | undefined, maxTokens: number)
 
 const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (request: LLMRequest) {
   const options = yield* decodeOptions(request.providerOptions ?? {})
+  const opus55 = isClaudeOpus55(request.model)
+  // Neither a manual thinking budget nor forced tool use has an equivalent on Opus 5.5.
+  // Reject explicitly requested behavior rather than silently changing its meaning.
+  if (opus55 && options.thinking && options.thinking.type !== "adaptive")
+    return yield* invalid(
+      "Claude Opus 5.5 only supports adaptive thinking; omit thinking or use effort to control its depth",
+    )
   const management = options.contextManagement
   const outputConfig = options.output_config ?? options.outputConfig
   const format = outputConfig?.format ?? undefined
@@ -1049,6 +1061,8 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
   const flattened = ProviderShared.flattenToolRequest(updates.request)
   const tools = flattened.tools.length === 0 ? undefined : flattened.tools.map((tool) => lowerTool(breakpoints, tool))
   // Anthropic rejects tool_choice when tools are absent; "none" is only meaningful with tools present.
+  if (tools && opus55 && (request.toolChoice?.type === "required" || request.toolChoice?.type === "tool"))
+    return yield* invalid("Claude Opus 5.5 does not support forced tool use; use toolChoice auto or none")
   const toolChoice = tools === undefined || !request.toolChoice ? undefined : yield* lowerToolChoice(request.toolChoice)
   const systemParts = request.system.filter((part) => part.text.length > 0)
   const system =

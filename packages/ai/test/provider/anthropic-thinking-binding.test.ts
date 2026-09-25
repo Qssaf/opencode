@@ -12,6 +12,7 @@ for (const [id, enabled] of [
   ["anthropic/claude-fable-5.1", true],
   ["claude-fable-5-1@default", true],
   ["claude-fable-5-1@20260901", true],
+  ["claude-opus-5-5", true],
   ["claude-sonnet-6", true],
   ["claude-opus-5-20260901", false],
   ["claude-opus-4-8", false],
