@@ -102,6 +102,12 @@ The estimate follows these rules:
 - A successful checkpoint rebuilds the same pending model step. It does not
   promote the input again or spend another agent step.
 
+Compaction normally sends the existing conversation for summarization. If it
+cannot fit the selected model, OpenCode retries within the same prompt ceiling
+with a shorter text version: old tool results and media are reduced first, then
+older exchanges are omitted if needed. The original messages remain in session
+history.
+
 OpenCode also recognizes provider errors classified as context overflow. If no
 assistant output or other retry evidence was produced, it can compact and retry
 that model step once:

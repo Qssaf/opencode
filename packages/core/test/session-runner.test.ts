@@ -2749,22 +2749,16 @@ describe("SessionRunnerLLM", () => {
     })
   }
 
-  for (const response of ["length", "content-filter", "context overflow"] as const) {
+  for (const response of ["length", "content-filter"] as const) {
     scenario(`rejects compaction ${response} without retrying or committing its draft`, function* (s) {
       yield* s.llm.push(TestLLM.text("Earlier answer", "history"))
       yield* s.runPrompt("Earlier question")
       s.requests.length = 0
       yield* s.llm.push(
-        response === "context overflow"
-          ? Stream.fail(
-              new AIError({
-                reason: new InvalidRequestError({ message: "Too long", classification: "context-overflow" }),
-              }),
-            )
-          : TestLLM.complete(
-              { reason: { normalized: response } },
-              LLMEvent.textDelta({ id: "truncated", text: "## Objective\n- Incomplete summary" }),
-            ),
+        TestLLM.complete(
+          { reason: { normalized: response } },
+          LLMEvent.textDelta({ id: "truncated", text: "## Objective\n- Incomplete summary" }),
+        ),
       )
       const compaction = yield* s.session.compact({ sessionID })
       yield* s.resume
@@ -2777,6 +2771,98 @@ describe("SessionRunnerLLM", () => {
       expect(JSON.stringify(s.requests[1])).not.toContain("Incomplete summary")
     })
   }
+
+  scenario("stops after three smaller compaction inputs overflow", function* (s) {
+    yield* s.llm.push(...Array.from({ length: 8 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
+    yield* Effect.forEach(Array.from({ length: 8 }, (_, index) => index), (index) =>
+      s.runPrompt(`Request ${index}: ${"context ".repeat(30)}`),
+    )
+    s.currentModel = unknownContextModel
+    s.requests.length = 0
+    const overflow = () =>
+      Stream.fail(
+        new AIError({ reason: new InvalidRequestError({ message: "Too long", classification: "context-overflow" }) }),
+      )
+    yield* s.llm.push(overflow(), overflow(), overflow(), overflow())
+    const compaction = yield* s.session.compact({ sessionID })
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(4)
+    expect(userTexts(s.requests[2])[0].length).toBeLessThan(userTexts(s.requests[1])[0].length)
+    expect(userTexts(s.requests[3])[0].length).toBeLessThan(userTexts(s.requests[2])[0].length)
+    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "failed" })
+    yield* s.llm.push(TestLLM.text("Continued", "continued"))
+    yield* s.runPrompt("Continue")
+    expect(userTexts(s.requests[4])).toContain("Request 0: " + "context ".repeat(30))
+  })
+
+  scenario("serializes history and omits media after a summary input overflow", function* (s) {
+    const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    yield* s.session.prompt({
+      sessionID,
+      text: "Earlier question",
+      files: [{ uri: `data:image/png;base64,${image}` }],
+      resume: false,
+    })
+    yield* s.llm.push(
+      TestLLM.stop(
+        LLMEvent.toolCall({ id: "hosted", name: "web_search", input: { query: "earlier" }, providerExecuted: true }),
+        LLMEvent.toolResult({
+          id: "hosted",
+          name: "web_search",
+          result: { type: "text", value: "x".repeat(5_000) },
+          providerExecuted: true,
+        }),
+        LLMEvent.textStart({ id: "history" }),
+        LLMEvent.textDelta({ id: "history", text: "Earlier answer" }),
+        LLMEvent.textEnd({ id: "history" }),
+      ),
+    )
+    yield* s.resume
+    s.requests.length = 0
+    yield* s.llm.push(
+      [LLMEvent.providerError({ message: "Too long", classification: "context-overflow" })],
+      TestLLM.text("## Objective\n- Recovered", "summary"),
+    )
+    const compaction = yield* s.session.compact({ sessionID })
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests[0]?.messages.some((message) => message.content.some((part) => part.type === "media"))).toBeTrue()
+    expect(s.requests[1]?.messages.every((message) => message.role === "user")).toBeTrue()
+    expect(userTexts(s.requests[1])[0]).toContain("[Attached image/png; content omitted]")
+    expect(userTexts(s.requests[1])[0]).toContain("[Tool result web_search]:")
+    expect(userTexts(s.requests[1])[0]).toContain("[truncated]")
+    expect(userTexts(s.requests[1])[0]).not.toContain("x".repeat(2_000))
+    expect(s.requests[1]?.system).toEqual(s.requests[0]?.system)
+    expect(s.requests[1]?.tools).toEqual(s.requests[0]?.tools)
+    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({ status: "completed" })
+  })
+
+  scenario("fits serialized compaction history by omitting oldest exchanges", function* (s) {
+    const service = yield* SessionCompaction.Service
+    yield* service.transform((editor) => editor.configure({ buffer: 3_000 }))
+    s.currentModel = testModel("large-history", { context: 1_000_000, output: 32_000 })
+    yield* s.llm.push(...Array.from({ length: 4 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
+    yield* Effect.forEach(Array.from({ length: 4 }, (_, index) => index), (index) =>
+      s.runPrompt(`Request ${index}: ${"x".repeat(8_000)}`),
+    )
+    s.currentModel = testModel("smaller-history", { context: 7_000, output: 1_000 })
+    s.requests.length = 0
+    yield* s.llm.push(TestLLM.text("## Objective\n- Recovered", "summary"))
+    const compaction = yield* s.session.compact({ sessionID })
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(1)
+    expect(userTexts(s.requests[0])[0]).toContain("older exchanges omitted")
+    expect(userTexts(s.requests[0])[0]).not.toContain("Request 0:")
+    expect(userTexts(s.requests[0])[0]).not.toContain("Request 1:")
+    expect(userTexts(s.requests[0])[0]).toContain("Request 2:")
+    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
+      status: "completed",
+      summary: expect.stringContaining("older exchanges were omitted from the summary input"),
+    })
+  })
 
   scenario("records cancelled manual compaction without surfacing an internal failure", function* (s) {
     yield* s.llm.push(TestLLM.text("Earlier answer", "text-manual-interrupt-history"))
