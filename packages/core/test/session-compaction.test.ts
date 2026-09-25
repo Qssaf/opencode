@@ -209,7 +209,8 @@ it.effect("auto compaction estimates current content against the buffered prompt
     expect(compaction.required(input(252_000, inputLimited))).toBe(true)
     const native = (tokens: number, limit: { context: number; input?: number; output: number } = inputLimited) => {
       const selected = input(tokens, limit)
-      return { ...selected, resolved: { ...selected.resolved, compaction: { type: "native" as const } } }
+      const model = { ...selected.resolved, compaction: { type: "native" as const } }
+      return { ...selected, context: { ...selected.context, model } }
     }
     expect(compaction.required(native(251_999))).toBe(false)
     expect(compaction.required(native(252_000))).toBe(true)
@@ -267,10 +268,8 @@ it.effect("auto compaction estimates current content against the buffered prompt
       [["text", "pdf"], 83_042, 2_021],
       [["text"], 79_082, 41],
     ] as const) {
-      const selected = {
-        ...grown,
-        resolved: { ...grown.resolved, capabilities: { ...grown.resolved.capabilities, input: modalities } },
-      }
+      const model = { ...grown.resolved, capabilities: { ...grown.resolved.capabilities, input: modalities } }
+      const selected = { ...grown, context: { ...grown.context, model } }
       expect(SessionCompaction.estimateTokens({ ...selected, messages: [...messages, user] })).toBe(tokens)
       expect(SessionCompaction.estimateTokens({ ...selected, messages: [user] })).toBe(fallback + 20)
     }

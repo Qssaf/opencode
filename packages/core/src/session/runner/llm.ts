@@ -217,7 +217,7 @@ const layer = Layer.effect(
           context: loaded,
           prepare: context.request.compaction,
         }
-        if (compaction.required({ messages: loaded.messages, resolved: loaded.model, context: loaded })) {
+        if (compaction.required({ messages: loaded.messages, context: loaded })) {
           const result = yield* compaction.compact(compactionInput)
           if (result.status !== "completed") return yield* new StepFailedError({ error: result.error })
           if (result.recoveredOverflow) recoverOverflow = false
